@@ -216,6 +216,9 @@ class Parser implements ParserInterface
             }
 
             $valueNode = $this->parseValue();
+            $trailingComment = $this->collectTrailingComment($valueNode->getPosition()->line);
+            $valueNode->setTrailingComment($trailingComment);
+
             $arrayNode->add($valueNode);
 
             $this->skipNewlinesAndComments();
@@ -248,6 +251,8 @@ class Parser implements ParserInterface
             $keyPath = $this->parseKeyPath();
             $this->stream->expect("Expected '=' in inline table", TokenType::EQUAL);
             $valueNode = $this->parseValue();
+            $trailingComment = $this->collectTrailingComment($valueNode->getPosition()->line);
+            $valueNode->setTrailingComment($trailingComment);
 
             // 将键值对直接塞进内联表 (内联表不支持复杂的点号隐式建表，只支持单层覆盖)
             if (count($keyPath->segments) > 1) {
@@ -510,13 +515,14 @@ class Parser implements ParserInterface
             $newTable = new TableNode(new Position(0, 0), '', $leadingComments, $trailingComment);
             $newTable->setImplicit(false);
             $arrayNode->add($newTable);
+
         } else {
             // 处理 [table]
             if ($current->has($finalSegment)) {
                 $node = $current->get($finalSegment);
 
                 if ($node instanceof TableNode) {
-                    // ✨ 显式/隐式表逻辑
+                    // 显式/隐式表逻辑
                     if (!$node->isImplicit()) {
                         throw new ParseException(
                             sprintf("Table '[%s]' is already explicitly defined", $path),
@@ -530,6 +536,8 @@ class Parser implements ParserInterface
                     $node->setImplicit(false);
                     $node->setLeadingComments($leadingComments);
                     $node->setTrailingComment($trailingComment);
+
+                    // 这里原本就已经有了 early return
                     return $node;
                 }
 
@@ -545,9 +553,8 @@ class Parser implements ParserInterface
             $newTable = new TableNode(new Position(0, 0), '', $leadingComments, $trailingComment);
             $newTable->setImplicit(false); // 显式创建
             $current->set($finalSegment, $newTable);
-        }
 
-        // 指针指向这个新表
+        }
         return $newTable;
     }
 
