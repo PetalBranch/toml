@@ -27,6 +27,8 @@
     ]
   },
   "scripts":{
-    "test-toml": "cd tests && .\\toml-test-v2.1.0-windows-amd64.exe test -toml \"1.1\" -decoder \"php toml-test-runner.php\""
+    "test-toml": "cd tests && .\\toml-test-v2.1.0-windows-amd64.exe test -toml \"1.1\" -decoder \"php toml-test-runner.php\"",
+    "test-toml-encode": "cd tests && .\\toml-test-v2.1.0-windows-amd64.exe test -toml \"1.1\" -decoder \"php toml-test-runner.php\"",
+    "test-toml-decode": "cd tests && .\\toml-test-v2.1.0-windows-amd64.exe test -toml \"1.1\" -decoder \"php toml-test-runner.php\""
   }
 }

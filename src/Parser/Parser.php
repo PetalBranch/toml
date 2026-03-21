@@ -2,6 +2,8 @@
 
 namespace Petalbranch\Toml\Parser;
 
+use DateTimeImmutable;
+use Exception;
 use Petalbranch\Toml\Contract\Lexer\LexerInterface;
 use Petalbranch\Toml\Contract\Lexer\TokenInterface;
 use Petalbranch\Toml\Contract\Lexer\TokenStreamInterface;
@@ -11,6 +13,10 @@ use Petalbranch\Toml\Contract\Parser\TableNodeInterface;
 use Petalbranch\Toml\Exception\ParseException;
 use Petalbranch\Toml\Model\KeyPath;
 use Petalbranch\Toml\Support\Position;
+use Petalbranch\Toml\Support\TomlDate;
+use Petalbranch\Toml\Support\TomlLocalDateTime;
+use Petalbranch\Toml\Support\TomlOffsetDateTime;
+use Petalbranch\Toml\Support\TomlTime;
 use Petalbranch\Toml\Type\ParseErrorType;
 use Petalbranch\Toml\Type\TokenType;
 use Petalbranch\Toml\Type\TomlType;
@@ -491,111 +497,47 @@ class Parser implements ParserInterface
      */
     private function parseDatetime(string $value, TomlType $type, TokenInterface $token): string
     {
-        // 1. 验证日期部分 (YYYY-MM-DD)
-        if (in_array($type, [TomlType::OFFSET_DATETIME, TomlType::LOCAL_DATETIME, TomlType::LOCAL_DATE], true)) {
-            $year = (int)substr($value, 0, 4);
-            $month = (int)substr($value, 5, 2);
-            $day = (int)substr($value, 8, 2);
-
-            // checkdate 会自动处理大小月、闰年以及 00 等非法日期
-            if (!checkdate($month, $day, $year)) {
-                throw new ParseException(
-                    sprintf("Invalid date: %04d-%02d-%02d", $year, $month, $day),
-                    ParseErrorType::INVALID_CHAR, // 借用现有 Error Type
-                    $token->getLine(),
-                    $token->getColumn()
-                );
+        $normalized = strtoupper($value);
+        // 1. 严格位校验：禁止 DateTimeImmutable 的自动进位行为
+        // 检查日期 YYYY-MM-DD
+        if (preg_match('/^(\d{4})-(\d{2})-(\d{2})/', $normalized, $matches)) {
+            $y = (int)$matches[1];
+            $m = (int)$matches[2];
+            $d = (int)$matches[3];
+            // 检查年月日
+            if ($m < 1 || $m > 12 || $d < 1 || !checkdate($m, $d, $y)) {
+                throw new ParseException("Invalid date: day or month out of range", ParseErrorType::INVALID_CHAR, $token->getLine(), $token->getColumn());
             }
         }
 
-        // 2. 验证时间部分 (HH:MM:SS)
-        if (in_array($type, [TomlType::OFFSET_DATETIME, TomlType::LOCAL_DATETIME, TomlType::LOCAL_TIME], true)) {
-            // 如果是 LOCAL_TIME，从 0 开始算；如果是其他包含日期的，从 11 开始算 (跳过 YYYY-MM-DD 和 T/空格)
-            $timePart = $type === TomlType::LOCAL_TIME ? $value : substr($value, 11);
-
-            $hour = (int)substr($timePart, 0, 2);
-            $minute = (int)substr($timePart, 3, 2);
-
-            if ($hour > 23 || $minute > 59) {
-                throw new ParseException(
-                    sprintf("Invalid time: %02d:%02d", $hour, $minute),
-                    ParseErrorType::INVALID_CHAR,
-                    $token->getLine(),
-                    $token->getColumn()
-                );
-            }
-
-            // 如果有秒数 (有些时间可能只写到分钟)
-            if (isset($timePart[5]) && $timePart[5] === ':') {
-                $second = (int)substr($timePart, 6, 2);
-                if ($second > 60) { // TOML 规范 (RFC 3339) 允许 60 作为闰秒 (Leap Second)
-                    throw new ParseException(
-                        sprintf("Invalid seconds: %02d", $second),
-                        ParseErrorType::INVALID_CHAR,
-                        $token->getLine(),
-                        $token->getColumn()
-                    );
-                }
+        // 检查时间 HH:MM:SS
+        // 注意：如果是 LOCAL_TIME，时间在开头；如果是 DATETIME，时间在 T 后面
+        $timePart = ($type === TomlType::LOCAL_TIME) ? $normalized : substr($normalized, 11);
+        if (preg_match('/^(\d{2}):(\d{2}):(\d{2})/', $timePart, $matches)) {
+            $hh = (int)$matches[1];
+            $mm = (int)$matches[2];
+            $ss = (int)$matches[3];
+            // 24:00:00 是非法的，60 秒仅在闰秒合法（TOML 允许 60）
+            if ($hh > 23 || $mm > 59 || $ss > 60) {
+                throw new ParseException("Invalid time: hour or minute out of range", ParseErrorType::INVALID_CHAR, $token->getLine(), $token->getColumn());
             }
         }
 
-        // 验证时区偏移 (仅限 OFFSET_DATETIME)
-        if ($type === TomlType::OFFSET_DATETIME) {
-            // 时区标记通常是 Z, z, 或者 +HH:MM, -HH:MM
-            // 从索引 10 (跳过日期部分) 之后开始找 + 或 - 符号
-            $offsetPos = strpos($value, '+', 10);
-            if ($offsetPos === false) {
-                $offsetPos = strpos($value, '-', 10);
-            }
+        // 2. 规范化格式 (补齐秒数，空格转 T)
+        $normalized = $this->normalizeDatetimeString($normalized, $type);
 
-            if ($offsetPos !== false) {
-                $offsetHour = (int)substr($value, $offsetPos + 1, 2);
-                $offsetMinute = (int)substr($value, $offsetPos + 4, 2);
-
-                // 根据 RFC 3339，时区偏移的小时必须在 00-23 之间，分钟在 00-59 之间
-                if ($offsetHour > 23 || $offsetMinute > 59) {
-                    throw new ParseException(
-                        sprintf("Invalid timezone offset: %s", substr($value, $offsetPos)),
-                        ParseErrorType::INVALID_CHAR,
-                        $token->getLine(),
-                        $token->getColumn()
-                    );
-                }
-            }
+        try {
+            // 3. 构造 Support 对象
+            return match ($type) {
+                TomlType::LOCAL_DATE => new TomlDate(new DateTimeImmutable($normalized)),
+                TomlType::LOCAL_TIME => $this->createTomlTime($normalized),
+                TomlType::LOCAL_DATETIME => new TomlLocalDateTime(new DateTimeImmutable($normalized)),
+                TomlType::OFFSET_DATETIME => new TomlOffsetDateTime(new DateTimeImmutable($normalized)),
+                default => throw new \Exception("Unreachable")
+            };
+        } catch (\Exception $e) {
+            throw new ParseException("Invalid datetime format", ParseErrorType::INVALID_CHAR, $token->getLine(), $token->getColumn());
         }
-
-        // 3. 规范化格式
-        $normalized = strtoupper($value); // 统一大写 T 和 Z
-
-        if ($type === TomlType::LOCAL_TIME) {
-            // 如果只有 HH:MM (长度为 5)，补齐秒数
-            if (strlen($normalized) === 5) {
-                $normalized .= ':00';
-            }
-            return $normalized;
-        }
-
-        if (in_array($type, [TomlType::OFFSET_DATETIME, TomlType::LOCAL_DATETIME], true)) {
-            // 将日期和时间之间的空格统一替换为标准 'T'
-            if ($normalized[10] === ' ') {
-                $normalized[10] = 'T';
-            }
-
-            // 检查是否省略了秒数 (时间部分的分钟恰好在索引 14 和 15)
-            if (strlen($normalized) === 16) {
-                // e.g. "1979-05-27T07:32"
-                $normalized .= ':00';
-            } elseif (strlen($normalized) > 16) {
-                // e.g. "1979-05-27T07:32Z" 或 "1979-05-27T07:32-07:00"
-                $charAfterMinutes = $normalized[16];
-                if ($charAfterMinutes === 'Z' || $charAfterMinutes === '+' || $charAfterMinutes === '-') {
-                    // 在时区符号之前强行插入 ":00"
-                    $normalized = substr($normalized, 0, 16) . ':00' . substr($normalized, 16);
-                }
-            }
-        }
-
-        return $normalized;
     }
 
 
@@ -903,5 +845,71 @@ class Parser implements ParserInterface
                 break;
             }
         }
+    }
+
+
+    /**
+     * 创建 TomlTime 对象
+     *
+     * 根据标准化的时间字符串创建一个 TomlTime 实例。
+     * 支持两种格式的时间字符串：HH:MM:SS 和 HH:MM:SS.micros（包含微秒部分）。
+     * 微秒部分如果不足6位会自动补零，超过6位则截断。
+     *
+     * @param string $normalized 标准化的时间字符串，格式为 HH:MM:SS 或 HH:MM:SS.micros
+     * @return TomlTime 新创建的 TomlTime 实例
+     */
+    private function createTomlTime(string $normalized): TomlTime
+    {
+        // 格式可能是 HH:MM:SS 或 HH:MM:SS.micros
+        $parts = explode('.', $normalized);
+        $timeParts = explode(':', $parts[0]);
+
+        $hour = (int)$timeParts[0];
+        $minute = (int)$timeParts[1];
+        $second = (int)$timeParts[2];
+        $micro = 0;
+
+        if (isset($parts[1])) {
+            // 补齐 6 位微秒
+            $microStr = str_pad($parts[1], 6, '0', STR_PAD_RIGHT);
+            $micro = (int)substr($microStr, 0, 6);
+        }
+
+        return new TomlTime($hour, $minute, $second, $micro);
+    }
+
+
+    /**
+     * 标准化日期时间字符串
+     *
+     * 将输入的日期时间字符串转换为标准格式，以便后续解析。
+     * 对于不同类型的日期时间值进行相应的标准化处理：
+     * - 本地时间：确保包含秒数部分（HH:MM:SS）
+     * - 日期时间：统一使用'T'分隔日期和时间，确保包含秒数部分
+     * 同时将所有字符转换为大写形式。
+     *
+     * @param string $value 待标准化的日期时间字符串
+     * @param TomlType $type 日期时间的TOML类型（LOCAL_TIME, OFFSET_DATETIME, LOCAL_DATETIME等）
+     * @return string 标准化后的日期时间字符串
+     */
+    private function normalizeDatetimeString(string $value, TomlType $type): string
+    {
+        $normalized = strtoupper($value);
+        if ($type === TomlType::LOCAL_TIME) {
+            return (strlen($normalized) === 5) ? $normalized . ':00' : $normalized;
+        }
+
+        if (in_array($type, [TomlType::OFFSET_DATETIME, TomlType::LOCAL_DATETIME], true)) {
+            if ($normalized[10] === ' ') $normalized[10] = 'T';
+            if (strlen($normalized) === 16) {
+                $normalized .= ':00';
+            } elseif (strlen($normalized) > 16) {
+                $char = $normalized[16];
+                if (in_array($char, ['Z', '+', '-'])) {
+                    $normalized = substr($normalized, 0, 16) . ':00' . substr($normalized, 16);
+                }
+            }
+        }
+        return $normalized;
     }
 }
