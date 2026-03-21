@@ -193,8 +193,18 @@ class Lexer implements LexerInterface
         $lexeme = $char;
 
         // 处理 Windows 的 \r\n
-        if ($char === "\r" && !$this->isAtEnd() && $this->currentChar() === "\n") {
-            $lexeme .= $this->advance();
+        if ($char === "\r") {
+            if (!$this->isAtEnd() && $this->currentChar() === "\n") {
+                $lexeme .= $this->advance(); // 合法的 CRLF
+            } else {
+                // 拦截非法的裸 \r (Bare CR)
+                throw new ParseException(
+                    "Bare CR (carriage return) is not allowed",
+                    ParseErrorType::INVALID_CHAR,
+                    $this->line,
+                    $this->column
+                );
+            }
         }
 
         // 换行后，行号+1，列号归 1
@@ -226,7 +236,21 @@ class Lexer implements LexerInterface
         $startLine = $this->line;
         $startCol = $this->column;
         $comment = '#';
+        $this->advance(); // 先把 '#' 吃掉
+
         while (!$this->isAtEnd() && $this->currentChar() !== "\n" && $this->currentChar() !== "\r") {
+            $char = $this->currentChar();
+
+            // 拦截非法的控制字符，参阅：https://toml.io/en/v1.1.0#comment；
+            if ($this->isControlChar($char) && $char !== "\t") {
+                throw new ParseException(
+                    "Invalid control character in comment",
+                    ParseErrorType::INVALID_CHAR,
+                    $this->line,
+                    $this->column
+                );
+            }
+
             $comment .= $this->advance();
         }
         // 注意：不要在这里吃掉换行符，留给下一轮循环的 scanNewline 处理，
@@ -280,7 +304,7 @@ class Lexer implements LexerInterface
     private function isAlphaNumericOrDash(string $char): bool
     {
         // 允许字母、数字、下划线、中划线 (用于裸键和数字)
-        return preg_match('/^[a-zA-Z0-9_-]$/', $char) === 1;
+        return preg_match('/^[a-zA-Z0-9_\-+]$/', $char) === 1;
     }
 
     /**
@@ -425,7 +449,7 @@ class Lexer implements LexerInterface
         $char = $this->advance();
 
         $value = match ($char) {
-            'b' => "\b",
+            'b' => "\x08",
             't' => "\t",
             'n' => "\n",
             'f' => "\f",
@@ -519,9 +543,25 @@ class Lexer implements LexerInterface
         }
 
         while (!$this->isAtEnd()) {
-            // 检测结束标志 ''' (注意：TOML 允许字符串内部包含 ''，所以必须严格匹配 3 个)
-            if ($this->currentChar() === "'" && $this->peekChar() === "'" && $this->peekChar(2) === "'") {
-                break;
+            // 分离字符串尾部的单引号和结束符
+            if ($this->currentChar() === "'") {
+                $quotes = 1;
+                while ($this->peekChar($quotes) === "'") {
+                    $quotes++;
+                }
+
+                if ($quotes >= 3) {
+                    $contentQuotes = $quotes - 3;
+                    if ($contentQuotes > 2) {
+                        throw new ParseException("Too many quotes in multiline literal string", ParseErrorType::INVALID_CHAR, $this->line, $this->column);
+                    }
+
+                    for ($i = 0; $i < $contentQuotes; $i++) {
+                        $lexeme .= $this->advance();
+                        $value .= "'";
+                    }
+                    break;
+                }
             }
 
             $char = $this->currentChar();
@@ -530,10 +570,15 @@ class Lexer implements LexerInterface
             if ($char === "\n" || $char === "\r") {
                 $lexeme .= $char;
                 $value .= $char;
-                if ($char === "\r" && $this->peekChar() === "\n") {
-                    $char2 = $this->advance();
-                    $lexeme .= $char2;
-                    $value .= $char2;
+                if ($char === "\r") {
+                    if ($this->peekChar() === "\n") {
+                        $char2 = $this->advance();
+                        $lexeme .= $char2;
+                        $value .= $char2;
+                    } else {
+                        // 不允许单独的 CR
+                        throw new ParseException("Bare CR is not allowed in strings", ParseErrorType::INVALID_CHAR, $this->line, $this->column);
+                    }
                 } else {
                     $this->advance();
                 }
@@ -599,8 +644,27 @@ class Lexer implements LexerInterface
         }
 
         while (!$this->isAtEnd()) {
-            if ($this->currentChar() === '"' && $this->peekChar() === '"' && $this->peekChar(2) === '"') {
-                break;
+            // 分离字符串尾部的双引号和结束符
+            if ($this->currentChar() === '"') {
+                $quotes = 1;
+                while ($this->peekChar($quotes) === '"') {
+                    $quotes++;
+                }
+
+                if ($quotes >= 3) {
+                    $contentQuotes = $quotes - 3;
+                    // TOML 允许紧邻结束符的 1 到 2 个双引号，如果多于 2 个则是非法的连续引号
+                    if ($contentQuotes > 2) {
+                        throw new ParseException("Too many quotes in multiline basic string", ParseErrorType::INVALID_CHAR, $this->line, $this->column);
+                    }
+
+                    // 把属于内容的引号提前吃掉
+                    for ($i = 0; $i < $contentQuotes; $i++) {
+                        $lexeme .= $this->advance();
+                        $value .= '"';
+                    }
+                    break; // 完美抽身，把剩下的 3 个留给外面的收尾逻辑
+                }
             }
 
             $char = $this->currentChar();
@@ -661,10 +725,15 @@ class Lexer implements LexerInterface
             if ($char === "\n" || $char === "\r") {
                 $lexeme .= $char;
                 $value .= $char;
-                if ($char === "\r" && $this->peekChar() === "\n") {
-                    $char2 = $this->advance();
-                    $lexeme .= $char2;
-                    $value .= $char2;
+                if ($char === "\r") {
+                    if ($this->peekChar() === "\n") {
+                        $char2 = $this->advance();
+                        $lexeme .= $char2;
+                        $value .= $char2;
+                    } else {
+                        // 不允许单独的 CR
+                        throw new ParseException("Bare CR is not allowed in strings", ParseErrorType::INVALID_CHAR, $this->line, $this->column);
+                    }
                 } else {
                     $this->advance();
                 }
@@ -729,10 +798,12 @@ class Lexer implements LexerInterface
         // 1. 圈定候选区域：一直读取，直到遇到 TOML 的结构分隔符
         $subject = '';
         $lookahead = $this->cursor;
-        while ($lookahead < $this->length) {
+        $maxLength = 100; // 添加长度上限，防御正则性能陷阱
+
+        while ($lookahead < $this->length && ($lookahead - $this->cursor) < $maxLength) {
             $c = $this->chars[$lookahead];
             // 注意：绝不能在这里把点号 (.) 加上，因为浮点数和日期都有点号！
-            if (in_array($c, [' ', "\t", "\n", "\r", '=', ',', '[', ']', '{', '}', '#'], true)) {
+            if (in_array($c, ["\n", "\r", '=', ',', '[', ']', '{', '}', '#'], true)) {
                 break;
             }
             $subject .= $c;

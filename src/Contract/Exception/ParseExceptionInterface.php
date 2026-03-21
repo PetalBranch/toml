@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Petalbranch\Toml\Contract\Exception;
 
 use Petalbranch\Toml\Support\ErrorContext;
+use Petalbranch\Toml\Type\ParseErrorType;
 
 /**
  * 解析异常接口

@@ -20,5 +20,13 @@
   "require": {
     "php": "^8.3",
     "ext-mbstring": "*"
+  },
+  "archive": {
+    "exclude": [
+      "/tests"
+    ]
+  },
+  "scripts":{
+    "test-toml": "cd tests && .\\toml-test-v2.1.0-windows-amd64.exe test -toml \"1.1\" -decoder \"php toml-test-runner.php\""
   }
 }
