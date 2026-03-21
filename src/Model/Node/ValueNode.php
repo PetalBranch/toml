@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Petalbranch\Toml\Parser;
+namespace Petalbranch\Toml\Model\Node;
 
 use Petalbranch\Toml\Support\Position;
 use Petalbranch\Toml\Type\TomlType;

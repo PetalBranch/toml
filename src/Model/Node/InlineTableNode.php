@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Petalbranch\Toml\Parser;
+namespace Petalbranch\Toml\Model\Node;
 
 /**
  * TOML 内联表格节点类

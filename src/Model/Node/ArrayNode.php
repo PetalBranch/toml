@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Petalbranch\Toml\Parser;
+namespace Petalbranch\Toml\Model\Node;
 
 use ArrayIterator;
 use OutOfBoundsException;
@@ -32,18 +32,18 @@ class ArrayNode extends Node implements ArrayNodeInterface
     /**
      * 构造函数
      *
-     * @param Position $position 节点在源码中的位置
+     * @param Position|null $position 节点在源码中的位置
      * @param string $raw 原始字符串
      * @param bool $declaredAsTableArray 是否为表格数组，默认为 false
      * @param list<string>|null $leadingComments 前导注释
      * @param string|null $trailingComment 尾部注释
      */
     public function __construct(
-        Position $position,
-        string   $raw,
-        bool     $declaredAsTableArray = false,
-        ?array   $leadingComments = null,
-        ?string  $trailingComment = null
+        ?Position $position = null,
+        string    $raw = "",
+        bool      $declaredAsTableArray = false,
+        ?array    $leadingComments = null,
+        ?string   $trailingComment = null
     )
     {
         parent::__construct($position, $raw, $leadingComments, $trailingComment);

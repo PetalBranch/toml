@@ -1,10 +1,16 @@
 {
   "name": "petalbranch/toml",
-  "description": "description",
+  "description": "A TOML parser and dumper for PHP.",
   "type": "library",
   "require-dev": {
-    "phpunit/phpunit": "^13.0"
+    "phpunit/phpunit": "^11.0 || ^12.0 || ^13.0"
   },
+  "keywords": [
+    "toml",
+    "parser",
+    "dumper",
+    "php"
+  ],
   "license": "Apache-2.0",
   "autoload": {
     "psr-4": {
@@ -26,9 +32,8 @@
       "/tests"
     ]
   },
-  "scripts":{
-    "test-toml": "cd tests && .\\toml-test-v2.1.0-windows-amd64.exe test -toml \"1.1\" -decoder \"php toml-test-runner.php\"",
-    "test-toml-encode": "cd tests && .\\toml-test-v2.1.0-windows-amd64.exe test -toml \"1.1\" -decoder \"php toml-test-runner.php\"",
-    "test-toml-decode": "cd tests && .\\toml-test-v2.1.0-windows-amd64.exe test -toml \"1.1\" -decoder \"php toml-test-runner.php\""
+  "scripts": {
+    "test-toml": "cd tests && .\\toml-test-v2.1.0-windows-amd64.exe test -toml \"1.1\" -decoder \"php toml-test-decoder.php\" -encoder \"php toml-test-encoder.php\"",
+    "test-toml-decoder": "cd tests && .\\toml-test-v2.1.0-windows-amd64.exe test -toml \"1.1\" -decoder \"php toml-test-decoder.php\""
   }
 }

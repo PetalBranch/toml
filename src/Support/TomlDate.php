@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Petalbranch\Toml\Support;
 
 use DateTimeImmutable;
+use Petalbranch\Toml\Contract\Dumper\TomlSerializableInterface;
 use Petalbranch\Toml\Contract\Type\TomlTemporalInterface;
 use Stringable;
 
@@ -16,7 +17,7 @@ use Stringable;
  * 内部使用 DateTimeImmutable 对象存储日期，并强制将时间部分设置为 00:00:00.000，
  * 以确保只表示纯粹的日期概念。
  */
-readonly final class TomlDate implements TomlTemporalInterface, Stringable
+readonly final class TomlDate implements TomlTemporalInterface, Stringable, TomlSerializableInterface
 {
     private DateTimeImmutable $date;
 
@@ -53,7 +54,7 @@ readonly final class TomlDate implements TomlTemporalInterface, Stringable
     public function __construct(DateTimeImmutable $date)
     {
         // 将时间移至00:00:00.000
-        $this->date = $date->setTime(0, 0, 0, 0);
+        $this->date = $date->setTime(0, 0);
         $this->year = (int)$this->date->format('Y');
         $this->month = (int)$this->date->format('m');
         $this->day = (int)$this->date->format('d');
@@ -83,8 +84,30 @@ readonly final class TomlDate implements TomlTemporalInterface, Stringable
         return $this->date->format('Y-m-d');
     }
 
-
+    /**
+     * 转换为 TOML 格式的字符串
+     *
+     * 将当前日期对象转换为符合 TOML 规范的字符串表示。
+     * 该方法实现了 TomlSerializableInterface 接口，允许对象
+     * 在序列化时被正确处理。
+     *
+     * @return string 格式化后的 TOML 日期字符串
+     */
     public function __toString(): string
+    {
+        return $this->formatToml();
+    }
+
+    /**
+     * 转换为 TOML 格式的字符串
+     *
+     * 将当前日期对象转换为符合 TOML 规范的字符串表示。
+     * 该方法实现了 TomlSerializableInterface 接口，允许对象
+     * 在序列化时被正确处理。
+     *
+     * @return string 格式化后的 TOML 日期字符串
+     */
+    public function toToml(): string
     {
         return $this->formatToml();
     }

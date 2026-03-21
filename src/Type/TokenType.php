@@ -119,10 +119,4 @@ enum TokenType
      * 注释
      */
     case COMMENT;
-
-    // ===== 特殊 =====
-    /**
-     * 无效的词法单元
-     */
-    case INVALID;
 }

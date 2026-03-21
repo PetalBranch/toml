@@ -9,9 +9,12 @@ use Petalbranch\Toml\Contract\Lexer\LexerInterface;
 use Petalbranch\Toml\Contract\Lexer\TokenStreamInterface;
 use Petalbranch\Toml\Exception\ParseException;
 use Petalbranch\Toml\Support\LazyTokenStream;
+use Petalbranch\Toml\Support\ThrowsErrorTrait;
 use Petalbranch\Toml\Support\Token;
+use Petalbranch\Toml\Support\ErrorContext;
 use Petalbranch\Toml\Type\ParseErrorType;
 use Petalbranch\Toml\Type\TokenType;
+
 
 /**
  * TOML 词法分析器实现类
@@ -23,6 +26,8 @@ use Petalbranch\Toml\Type\TokenType;
  */
 class Lexer implements LexerInterface
 {
+    use ThrowsErrorTrait;
+
     private array $chars = [];
     private int $length = 0;
 
@@ -41,6 +46,8 @@ class Lexer implements LexerInterface
      */
     public function tokenize(string $source): TokenStreamInterface
     {
+        $this->rawSource = $source;
+
         // 将原文本强行按 UTF-8 切成字符数组。哪怕是 多字节的 Emoji、语言字符，在这里也只是数组里的 1 个元素。
         if ($source !== '') {
             $this->chars = mb_str_split($source, 1, 'UTF-8');
@@ -105,7 +112,7 @@ class Lexer implements LexerInterface
             }
 
             // 如果走到这里，说明遇到了不认识的字符 (包含非法的控制字符等)
-            throw new ParseException(
+            $this->throwError(
                 sprintf('Unexpected character "%s"', $char),
                 ParseErrorType::INVALID_CHAR,
                 $this->line,
@@ -198,7 +205,7 @@ class Lexer implements LexerInterface
                 $lexeme .= $this->advance(); // 合法的 CRLF
             } else {
                 // 拦截非法的裸 \r (Bare CR)
-                throw new ParseException(
+                $this->throwError(
                     "Bare CR (carriage return) is not allowed",
                     ParseErrorType::INVALID_CHAR,
                     $this->line,
@@ -243,7 +250,7 @@ class Lexer implements LexerInterface
 
             // 拦截非法的控制字符，参阅：https://toml.io/en/v1.1.0#comment；
             if ($this->isControlChar($char) && $char !== "\t") {
-                throw new ParseException(
+                $this->throwError(
                     "Invalid control character in comment",
                     ParseErrorType::INVALID_CHAR,
                     $this->line,
@@ -350,13 +357,13 @@ class Lexer implements LexerInterface
 
             // 单行字符串不允许真正的换行符
             if ($char === "\n" || $char === "\r") {
-                throw new ParseException("Literal strings cannot contain newlines", ParseErrorType::INVALID_CHAR, $this->line, $this->column);
+                $this->throwError("Literal strings cannot contain newlines", ParseErrorType::INVALID_CHAR, $this->line, $this->column);
             }
 
             // 检查非法控制字符 (TOML 规范要求除 Tab 外的控制字符必须被转义，但字面量无法转义，所以直接报错)
             // 参考：https://toml.io/en/v1.1.0#string
             if ($this->isControlChar($char) && $char !== "\t") {
-                throw new ParseException("Invalid control character in string", ParseErrorType::INVALID_CHAR, $this->line, $this->column);
+                $this->throwError("Invalid control character in string", ParseErrorType::INVALID_CHAR, $this->line, $this->column);
             }
 
             $lexeme .= $char;
@@ -365,7 +372,7 @@ class Lexer implements LexerInterface
         }
 
         if ($this->isAtEnd()) {
-            throw new ParseException("Unterminated literal string", ParseErrorType::UNEXPECTED_EOF, $this->line, $this->column);
+            $this->throwError("Unterminated literal string", ParseErrorType::UNEXPECTED_EOF, $this->line, $this->column);
         }
 
         $lexeme .= $this->currentChar(); // 加上结尾的 '
@@ -397,11 +404,11 @@ class Lexer implements LexerInterface
             $char = $this->currentChar();
 
             if ($char === "\n" || $char === "\r") {
-                throw new ParseException("Basic strings cannot contain newlines", ParseErrorType::INVALID_CHAR, $this->line, $this->column);
+                $this->throwError("Basic strings cannot contain newlines", ParseErrorType::INVALID_CHAR, $this->line, $this->column);
             }
 
             if ($this->isControlChar($char) && $char !== "\t") {
-                throw new ParseException("Invalid control character in string", ParseErrorType::INVALID_CHAR, $this->line, $this->column);
+                $this->throwError("Invalid control character in string", ParseErrorType::INVALID_CHAR, $this->line, $this->column);
             }
 
             // 处理转义字符
@@ -410,7 +417,7 @@ class Lexer implements LexerInterface
                 $this->advance(); // 消耗反斜杠
 
                 if ($this->isAtEnd()) {
-                    throw new ParseException("Unterminated escape sequence", ParseErrorType::UNEXPECTED_EOF, $this->line, $this->column);
+                    $this->throwError("Unterminated escape sequence", ParseErrorType::UNEXPECTED_EOF, $this->line, $this->column);
                 }
 
                 $escapeResult = $this->scanEscapeSequence();
@@ -423,7 +430,7 @@ class Lexer implements LexerInterface
         }
 
         if ($this->isAtEnd()) {
-            throw new ParseException("Unterminated basic string", ParseErrorType::UNEXPECTED_EOF, $this->line, $this->column);
+            $this->throwError("Unterminated basic string", ParseErrorType::UNEXPECTED_EOF, $this->line, $this->column);
         }
 
         $lexeme .= $this->currentChar();
@@ -460,7 +467,7 @@ class Lexer implements LexerInterface
             'x' => $this->scanHexEscape(), // Toml v1.1.0 新增：\xHH 基本十六进制转义
             'u' => $this->scanUnicodeEscape(4),
             'U' => $this->scanUnicodeEscape(8),
-            default => throw new ParseException(sprintf('Invalid escape sequence: \\%s', $char), ParseErrorType::INVALID_CHAR, $this->line, $this->column - 1)
+            default => $this->throwError(sprintf('Invalid escape sequence: \\%s', $char), ParseErrorType::INVALID_CHAR, $this->line, $this->column - 1)
         };
 
         // 如果是十六进制或 Unicode 转义，lexeme 需要把后面的 Hex 字符也算上
@@ -490,11 +497,11 @@ class Lexer implements LexerInterface
         $hex = '';
         for ($i = 0; $i < $length; $i++) {
             if ($this->isAtEnd()) {
-                throw new ParseException("Unterminated Unicode escape", ParseErrorType::UNEXPECTED_EOF, $this->line, $this->column);
+                $this->throwError("Unterminated Unicode escape", ParseErrorType::UNEXPECTED_EOF, $this->line, $this->column);
             }
             $char = $this->advance();
             if (preg_match('/^[0-9a-fA-F]$/', $char) !== 1) {
-                throw new ParseException(sprintf('Invalid Unicode escape character: %s', $char), ParseErrorType::INVALID_CHAR, $this->line, $this->column - 1);
+                $this->throwError(sprintf('Invalid Unicode escape character: %s', $char), ParseErrorType::INVALID_CHAR, $this->line, $this->column - 1);
             }
             $hex .= $char;
         }
@@ -503,7 +510,7 @@ class Lexer implements LexerInterface
 
         // TOML 规范要求：Unicode 标量值必须在有效范围内
         if (($codePoint >= 0xD800 && $codePoint <= 0xDFFF) || $codePoint > 0x10FFFF) {
-            throw new ParseException(sprintf('Invalid Unicode scalar value: %X', $codePoint), ParseErrorType::INVALID_CHAR, $this->line, $this->column - $length - 2);
+            $this->throwError(sprintf('Invalid Unicode scalar value: %X', $codePoint), ParseErrorType::INVALID_CHAR, $this->line, $this->column - $length - 2);
         }
 
         return mb_chr($codePoint, 'UTF-8');
@@ -531,15 +538,9 @@ class Lexer implements LexerInterface
         $value = "";
 
         // TOML 规则：如果多行字符串紧跟一个换行符，必须忽略该换行符
-        if ($this->currentChar() === "\n") {
-            $lexeme .= $this->advance();
-            $this->line++;
-            $this->column = 1;
-        } elseif ($this->currentChar() === "\r" && $this->peekChar() === "\n") {
-            $lexeme .= $this->advance();
-            $lexeme .= $this->advance();
-            $this->line++;
-            $this->column = 1;
+        $char = $this->currentChar();
+        if ($char === "\n" || $char === "\r") {
+            $lexeme .= $this->consumeStringNewline();
         }
 
         while (!$this->isAtEnd()) {
@@ -553,7 +554,7 @@ class Lexer implements LexerInterface
                 if ($quotes >= 3) {
                     $contentQuotes = $quotes - 3;
                     if ($contentQuotes > 2) {
-                        throw new ParseException("Too many quotes in multiline literal string", ParseErrorType::INVALID_CHAR, $this->line, $this->column);
+                        $this->throwError("Too many quotes in multiline literal string", ParseErrorType::INVALID_CHAR, $this->line, $this->column);
                     }
 
                     for ($i = 0; $i < $contentQuotes; $i++) {
@@ -568,28 +569,15 @@ class Lexer implements LexerInterface
 
             // 维护行号
             if ($char === "\n" || $char === "\r") {
-                $lexeme .= $char;
-                $value .= $char;
-                if ($char === "\r") {
-                    if ($this->peekChar() === "\n") {
-                        $char2 = $this->advance();
-                        $lexeme .= $char2;
-                        $value .= $char2;
-                    } else {
-                        // 不允许单独的 CR
-                        throw new ParseException("Bare CR is not allowed in strings", ParseErrorType::INVALID_CHAR, $this->line, $this->column);
-                    }
-                } else {
-                    $this->advance();
-                }
-                $this->line++;
-                $this->column = 1;
+                $nl = $this->consumeStringNewline();
+                $lexeme .= $nl;
+                $value .= $nl;
                 continue;
             }
 
             // 检查非法控制字符
             if ($this->isControlChar($char) && $char !== "\t") {
-                throw new ParseException("Invalid control character in multiline literal string", ParseErrorType::INVALID_CHAR, $this->line, $this->column);
+                $this->throwError("Invalid control character in multiline literal string", ParseErrorType::INVALID_CHAR, $this->line, $this->column);
             }
 
             $lexeme .= $char;
@@ -598,7 +586,7 @@ class Lexer implements LexerInterface
         }
 
         if ($this->isAtEnd()) {
-            throw new ParseException("Unterminated multiline literal string", ParseErrorType::UNEXPECTED_EOF, $startLine, $startCol);
+            $this->throwError("Unterminated multiline literal string", ParseErrorType::UNEXPECTED_EOF, $startLine, $startCol);
         }
 
         // 消耗结尾的 '''
@@ -632,16 +620,21 @@ class Lexer implements LexerInterface
         $lexeme = '"""';
         $value = "";
 
-        if ($this->currentChar() === "\n") {
-            $lexeme .= $this->advance();
-            $this->line++;
-            $this->column = 1;
-        } elseif ($this->currentChar() === "\r" && $this->peekChar() === "\n") {
-            $lexeme .= $this->advance();
-            $lexeme .= $this->advance();
-            $this->line++;
-            $this->column = 1;
+        $char = $this->currentChar();
+        if ($char === "\n" || $char === "\r") {
+            $lexeme .= $this->consumeStringNewline();
         }
+
+//        if ($this->currentChar() === "\n") {
+//            $lexeme .= $this->advance();
+//            $this->line++;
+//            $this->column = 1;
+//        } elseif ($this->currentChar() === "\r" && $this->peekChar() === "\n") {
+//            $lexeme .= $this->advance();
+//            $lexeme .= $this->advance();
+//            $this->line++;
+//            $this->column = 1;
+//        }
 
         while (!$this->isAtEnd()) {
             // 分离字符串尾部的双引号和结束符
@@ -655,7 +648,7 @@ class Lexer implements LexerInterface
                     $contentQuotes = $quotes - 3;
                     // TOML 允许紧邻结束符的 1 到 2 个双引号，如果多于 2 个则是非法的连续引号
                     if ($contentQuotes > 2) {
-                        throw new ParseException("Too many quotes in multiline basic string", ParseErrorType::INVALID_CHAR, $this->line, $this->column);
+                        $this->throwError("Too many quotes in multiline basic string", ParseErrorType::INVALID_CHAR, $this->line, $this->column);
                     }
 
                     // 把属于内容的引号提前吃掉
@@ -695,14 +688,7 @@ class Lexer implements LexerInterface
                         if ($c === ' ' || $c === "\t") {
                             $lexeme .= $this->advance();
                         } elseif ($c === "\n" || $c === "\r") {
-                            $lexeme .= $c;
-                            if ($c === "\r" && $this->peekChar() === "\n") {
-                                $lexeme .= $this->advance();
-                            } else {
-                                $this->advance();
-                            }
-                            $this->line++;
-                            $this->column = 1;
+                            $lexeme .= $this->consumeStringNewline();
                         } else {
                             break;
                         }
@@ -715,7 +701,7 @@ class Lexer implements LexerInterface
             if ($char === '\\') {
                 $lexeme .= $char;
                 $this->advance();
-                if ($this->isAtEnd()) throw new ParseException("Unterminated escape sequence", ParseErrorType::UNEXPECTED_EOF, $this->line, $this->column);
+                if ($this->isAtEnd()) $this->throwError("Unterminated escape sequence", ParseErrorType::UNEXPECTED_EOF, $this->line, $this->column);
                 $escapeResult = $this->scanEscapeSequence(); // 复用之前写的单行字符串转义方法
                 $lexeme .= $escapeResult['lexeme'];
                 $value .= $escapeResult['value'];
@@ -723,27 +709,14 @@ class Lexer implements LexerInterface
             }
 
             if ($char === "\n" || $char === "\r") {
-                $lexeme .= $char;
-                $value .= $char;
-                if ($char === "\r") {
-                    if ($this->peekChar() === "\n") {
-                        $char2 = $this->advance();
-                        $lexeme .= $char2;
-                        $value .= $char2;
-                    } else {
-                        // 不允许单独的 CR
-                        throw new ParseException("Bare CR is not allowed in strings", ParseErrorType::INVALID_CHAR, $this->line, $this->column);
-                    }
-                } else {
-                    $this->advance();
-                }
-                $this->line++;
-                $this->column = 1;
+                $nl = $this->consumeStringNewline();
+                $lexeme .= $nl;
+                $value .= $nl;
                 continue;
             }
 
             if ($this->isControlChar($char) && $char !== "\t") {
-                throw new ParseException("Invalid control character in multiline basic string", ParseErrorType::INVALID_CHAR, $this->line, $this->column);
+                $this->throwError("Invalid control character in multiline basic string", ParseErrorType::INVALID_CHAR, $this->line, $this->column);
             }
 
             $lexeme .= $char;
@@ -752,7 +725,7 @@ class Lexer implements LexerInterface
         }
 
         if ($this->isAtEnd()) {
-            throw new ParseException("Unterminated multiline basic string", ParseErrorType::UNEXPECTED_EOF, $startLine, $startCol);
+            $this->throwError("Unterminated multiline basic string", ParseErrorType::UNEXPECTED_EOF, $startLine, $startCol);
         }
 
         $this->advance();
@@ -843,7 +816,7 @@ class Lexer implements LexerInterface
         }
 
         if ($matchedText === null) {
-            throw new ParseException(sprintf('Unexpected syntax near "%s"', substr($subject, 0, 10)), ParseErrorType::INVALID_CHAR, $this->line, $this->column);
+            $this->throwError(sprintf('Unexpected syntax near "%s"', substr($subject, 0, 10)), ParseErrorType::INVALID_CHAR, $this->line, $this->column);
         }
 
         // 将正则键名映射回真正的 TokenType 枚举
@@ -893,11 +866,11 @@ class Lexer implements LexerInterface
         $hex = '';
         for ($i = 0; $i < 2; $i++) {
             if ($this->isAtEnd()) {
-                throw new ParseException("Unterminated hex escape", ParseErrorType::UNEXPECTED_EOF, $this->line, $this->column);
+                $this->throwError("Unterminated hex escape", ParseErrorType::UNEXPECTED_EOF, $this->line, $this->column);
             }
             $char = $this->advance();
             if (preg_match('/^[0-9a-fA-F]$/', $char) !== 1) {
-                throw new ParseException(sprintf('Invalid hex escape character: %s', $char), ParseErrorType::INVALID_CHAR, $this->line, $this->column - 1);
+                $this->throwError(sprintf('Invalid hex escape character: %s', $char), ParseErrorType::INVALID_CHAR, $this->line, $this->column - 1);
             }
             $hex .= $char;
         }
@@ -906,5 +879,39 @@ class Lexer implements LexerInterface
         $codePoint = hexdec($hex);
         return mb_chr($codePoint, 'UTF-8');
     }
+
+
+    /**
+     * 消耗字符串内部的换行符 (LF 或 CRLF)，并维护行列号
+     * 如果遇到非法的单独 CR (Bare CR)，则抛出异常
+     *
+     * @return string 返回被消耗的换行符序列
+     */
+    private function consumeStringNewline(): string
+    {
+        $char = $this->advance(); // 先吃掉当前的 \n 或 \r
+        $newline = $char;
+
+        if ($char === "\r") {
+            if (!$this->isAtEnd() && $this->currentChar() === "\n") {
+                $newline .= $this->advance(); // 再吃掉 \n，完美形成 \r\n
+            } else {
+                // 字符串内严禁裸 \r
+                $this->throwError(
+                    "Bare CR is not allowed in strings",
+                    ParseErrorType::INVALID_CHAR,
+                    $this->line,
+                    $this->column
+                );
+            }
+        }
+
+        // 维护行列号
+        $this->line++;
+        $this->column = 1;
+
+        return $newline;
+    }
+
 
 }

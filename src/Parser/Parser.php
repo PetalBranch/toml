@@ -1,5 +1,7 @@
 <?php
 
+declare(strict_types=1);
+
 namespace Petalbranch\Toml\Parser;
 
 use DateTimeImmutable;
@@ -12,7 +14,13 @@ use Petalbranch\Toml\Contract\Parser\ParserInterface;
 use Petalbranch\Toml\Contract\Parser\TableNodeInterface;
 use Petalbranch\Toml\Exception\ParseException;
 use Petalbranch\Toml\Model\KeyPath;
+use Petalbranch\Toml\Model\Node\ArrayNode;
+use Petalbranch\Toml\Model\Node\InlineTableNode;
+use Petalbranch\Toml\Model\Node\TableNode;
+use Petalbranch\Toml\Model\Node\ValueNode;
+use Petalbranch\Toml\Support\ErrorContext;
 use Petalbranch\Toml\Support\Position;
+use Petalbranch\Toml\Support\ThrowsErrorTrait;
 use Petalbranch\Toml\Support\TomlDate;
 use Petalbranch\Toml\Support\TomlLocalDateTime;
 use Petalbranch\Toml\Support\TomlOffsetDateTime;
@@ -23,8 +31,18 @@ use Petalbranch\Toml\Type\TomlType;
 use RuntimeException;
 use SplObjectStorage;
 
+/**
+ * TOML 解析器
+ *
+ * 负责将 TOML 格式的字符串或文件解析为 PHP 数据结构。
+ * 实现了状态机模式，通过词法分析器获取 token 流，
+ * 然后根据语法规范构建抽象语法树（AST）。支持标准表、
+ * 表数组、内联表、各种数据类型和复杂键路径的解析。
+ */
 class Parser implements ParserInterface
 {
+    use ThrowsErrorTrait;
+
     private TokenStreamInterface $stream;
 
     private TableNode $root;
@@ -33,6 +51,13 @@ class Parser implements ParserInterface
 
     private ?SplObjectStorage $dottedKeyTables = null;
 
+    /**
+     * 构造函数
+     *
+     * 创建一个新的 Parser 实例。
+     *
+     * @param LexerInterface $lexer 词法分析器实例，用于将源码分解为 token
+     */
     public function __construct(
         private readonly LexerInterface $lexer
     )
@@ -43,12 +68,29 @@ class Parser implements ParserInterface
     // 门面方法 (Facade)
     // ==========================================
 
+    /**
+     * 解析 TOML 字符串
+     *
+     * 将输入的 TOML 字符串解析为 PHP 数组。
+     * 这是最常用的入口方法。
+     *
+     * @param string $toml 要解析的 TOML 格式字符串
+     * @return array 解析后的 PHP 关联数组
+     */
     public function parse(string $toml): array
     {
         return $this->parseToNode($toml)->getValue();
     }
 
-
+    /**
+     * 解析 TOML 文件
+     *
+     * 读取指定的文件内容并将其作为 TOML 文档进行解析。
+     *
+     * @param string $filename 要解析的文件路径
+     * @return array 解析后的 PHP 关联数组
+     * @throws RuntimeException 当文件不存在或不可读时抛出异常
+     */
     public function parseFile(string $filename): array
     {
         if (!is_file($filename) || !is_readable($filename)) {
@@ -58,8 +100,18 @@ class Parser implements ParserInterface
         return $this->parse($content);
     }
 
+    /**
+     * 解析为节点树
+     *
+     * 将 TOML 字符串解析为抽象语法树（AST）的根节点。
+     * 返回的是 TableNode 对象，而不是纯数组。
+     *
+     * @param string $toml 要解析的 TOML 格式字符串
+     * @return TableNodeInterface 解析得到的 AST 根节点
+     */
     public function parseToNode(string $toml): TableNodeInterface
     {
+        $this->rawSource = $toml;
         $stream = $this->lexer->tokenize($toml);
         return $this->parseStream($stream);
     }
@@ -68,7 +120,15 @@ class Parser implements ParserInterface
     // 核心逻辑 - 状态机与文档主循环
     // ==========================================
 
-
+    /**
+     * 解析 token 流
+     *
+     * 从 token 流中解析整个 TOML 文档，构建 AST 树。
+     * 这是解析器的核心方法，实现了文档主循环。
+     *
+     * @param TokenStreamInterface $stream 词法分析器生成的 token 流
+     * @return TableNodeInterface 解析完成的 AST 根节点
+     */
     public function parseStream(TokenStreamInterface $stream): TableNodeInterface
     {
         $this->stream = $stream;
@@ -101,18 +161,18 @@ class Parser implements ParserInterface
                 $this->parseEntry($leadingComments);
             } else {
                 // 既不是表头也不是键名，语法错误！
-                throw new ParseException(
+                $this->throwError(
                     sprintf('Unexpected token "%s" at document root', $currentToken->getLexeme()),
                     ParseErrorType::UNEXPECTED_TOKEN,
                     $currentToken->getLine(),
-                    $currentToken->getColumn()
+                    $currentToken->getColumn(),
+                    mb_strlen($currentToken->getLexeme())
                 );
             }
         }
 
         return $this->root;
     }
-
 
     /**
      * 解析键值对条目
@@ -126,11 +186,12 @@ class Parser implements ParserInterface
      */
     private function parseEntry(array $leadingComments): void
     {
-        // 1. 提取 KeyPath (例如 a.b.c 将返回包含 3 个段的 KeyPath 对象)
-        $keyPath = $this->parseKeyPath();
+
+        // 1. 提取 KeyPath (例如 a.b.c 将返回包含 3 个段的 KeyPath 对象) 和 元数据
+        list($keyPath, $metas) = $this->parseKeyPath();
 
         // 2. 期待等号
-        $this->stream->expect("Expected '=' after key", TokenType::EQUAL);
+        $this->expectToken("Expected '=' after key", TokenType::EQUAL);
 
         // 3. 解析具体的值 (可能是标量、数组或内联表)
         $valueNode = $this->parseValue();
@@ -142,11 +203,12 @@ class Parser implements ParserInterface
         // 确保解析完值和注释后，这一行必须干净地结束！（换行或 EOF）
         if (!$this->stream->isEOF() && $this->stream->current()->getType() !== TokenType::NEWLINE) {
             $invalid = $this->stream->current();
-            throw new ParseException(
+            $this->throwError(
                 sprintf('Unexpected token "%s" after value. Key-value pairs must be separated by newlines.', $invalid->getLexeme()),
                 ParseErrorType::UNEXPECTED_TOKEN,
                 $invalid->getLine(),
-                $invalid->getColumn()
+                $invalid->getColumn(),
+                mb_strwidth($invalid->getLexeme(), 'UTF-8')
             );
         }
 
@@ -155,7 +217,7 @@ class Parser implements ParserInterface
         $valueNode->setTrailingComment($trailingComment);
 
         // 5. 将键值对安全地插入到当前的上下文中 (处理点号键的隐式建表)
-        $this->insertDottedKey($this->currentTable, $keyPath, $valueNode);
+        $this->insertDottedKey($this->currentTable, $keyPath, $valueNode, $metas);
     }
 
     /**
@@ -186,7 +248,7 @@ class Parser implements ParserInterface
         }
 
         // 分支 3：标量值
-        $token = $this->stream->expect(
+        $token = $this->expectToken(
             "Expected a value",
             TokenType::STRING_BASIC, TokenType::STRING_LITERAL,
             TokenType::STRING_MULTILINE_BASIC, TokenType::STRING_MULTILINE_LITERAL,
@@ -206,7 +268,7 @@ class Parser implements ParserInterface
             TokenType::LOCAL_DATETIME => TomlType::LOCAL_DATETIME,
             TokenType::LOCAL_DATE => TomlType::LOCAL_DATE,
             TokenType::LOCAL_TIME => TomlType::LOCAL_TIME,
-            default => throw new ParseException(
+            default => $this->throwError(
                 "Unknown scalar type",
                 ParseErrorType::UNKNOWN_SCALAR_TYPE,
                 $token->getLine(),
@@ -236,10 +298,18 @@ class Parser implements ParserInterface
         );
     }
 
-
+    /**
+     * 解析数组
+     *
+     * 处理 TOML 中的数组定义，包括普通数组和嵌套数组。
+     * 支持数组中的任意类型的元素，包括其他数组和表。
+     *
+     * @return ArrayNode 解析得到的数组节点
+     * @throws ParseException 当数组语法错误（如缺少逗号或括号不匹配）时抛出异常
+     */
     private function parseArray(): ArrayNode
     {
-        $startToken = $this->stream->expect("Expected '['", TokenType::LEFT_BRACKET);
+        $startToken = $this->expectToken("Expected '['", TokenType::LEFT_BRACKET);
         $arrayNode = new ArrayNode(new Position($startToken->getLine(), $startToken->getColumn()), $startToken->getLexeme());
 
         while (!$this->stream->isEOF()) {
@@ -250,7 +320,7 @@ class Parser implements ParserInterface
             }
 
             $valueNode = $this->parseValue();
-            $trailingComment = $this->collectTrailingComment($valueNode->getPosition()->line);
+            $trailingComment = $this->collectTrailingComment();
             $valueNode->setTrailingComment($trailingComment);
 
             $arrayNode->add($valueNode);
@@ -262,43 +332,60 @@ class Parser implements ParserInterface
             } elseif ($this->stream->current()->getType() === TokenType::RIGHT_BRACKET) {
                 continue; // 尾部逗号是可选的，如果直接跟着 ]，下一轮会 break
             } else {
-                throw new ParseException("Expected ',' or ']' in array", ParseErrorType::UNEXPECTED_TOKEN, $this->stream->current()->getLine(), $this->stream->current()->getColumn());
+                $this->throwError(
+                    "Expected ',' or ']' in array",
+                    ParseErrorType::UNEXPECTED_TOKEN,
+                    $this->stream->current()->getLine(),
+                    $this->stream->current()->getColumn(),
+                    mb_strwidth($this->stream->current()->getLexeme(), 'UTF-8')
+                );
             }
         }
 
         return $arrayNode;
     }
 
+    /**
+     * 解析内联表
+     *
+     * 处理 TOML 中的大括号内联表语法 { key = value }。
+     * 内联表必须位于单行内，不能包含换行符。
+     *
+     * @return InlineTableNode 解析得到的内联表节点
+     * @throws ParseException 当内联表语法错误（如缺少逗号或括号不匹配）时抛出异常
+     */
     private function parseInlineTable(): InlineTableNode
     {
-        $startToken = $this->stream->expect("Expected '{'", TokenType::LEFT_BRACE);
+
+        $startToken = $this->expectToken("Expected '{'", TokenType::LEFT_BRACE);
         $inlineTable = new InlineTableNode(new Position($startToken->getLine(), $startToken->getColumn()), $startToken->getLexeme());
 
         while (!$this->stream->isEOF()) {
             $this->skipNewlinesAndComments(); // TOML 1.1.0 允许内联表换行
 
-            if ($this->stream->match(TokenType::RIGHT_BRACE)) {
-                break;
-            }
+            if ($this->stream->match(TokenType::RIGHT_BRACE)) break;
+
 
             // 内联表里面就是普通的键值对
-            $keyPath = $this->parseKeyPath();
-            $this->stream->expect("Expected '=' in inline table", TokenType::EQUAL);
+            list($keyPath, $metas) = $this->parseKeyPath();
+            $this->expectToken("Expected '=' in inline table", TokenType::EQUAL);
             $valueNode = $this->parseValue();
-            $trailingComment = $this->collectTrailingComment($valueNode->getPosition()->line);
+            $trailingComment = $this->collectTrailingComment();
             $valueNode->setTrailingComment($trailingComment);
 
             // 将键值对直接塞进内联表 (内联表不支持复杂的点号隐式建表，只支持单层覆盖)
             if (count($keyPath->segments) > 1) {
                 // TOML 1.1.0 允许内联表使用点号键: { a.b = 1 } 相当于 { a = { b = 1 } }
-                $this->insertDottedKey($inlineTable, $keyPath, $valueNode);
+                $this->insertDottedKey($inlineTable, $keyPath, $valueNode, $metas);
             } else {
+                $meta = $metas[0];
                 if ($inlineTable->has($keyPath->segments[0])) {
-                    throw new ParseException(
+                    $this->throwError(
                         "Duplicate key in inline table",
                         ParseErrorType::DUPLICATE_KEY,
-                        $this->stream->current()->getLine(),
-                        $this->stream->current()->getColumn()
+                        $meta['line'],
+                        $meta['col'],
+                        mb_strwidth($keyPath->segments[0], 'UTF-8')
                     );
                 }
                 $inlineTable->set($keyPath->segments[0], $valueNode);
@@ -311,11 +398,12 @@ class Parser implements ParserInterface
             } elseif ($this->stream->current()->getType() === TokenType::RIGHT_BRACE) {
                 continue;
             } else {
-                throw new ParseException(
+                $this->throwError(
                     "Expected ',' or '}' in inline table",
                     ParseErrorType::UNEXPECTED_TOKEN,
                     $this->stream->current()->getLine(),
-                    $this->stream->current()->getColumn()
+                    $this->stream->current()->getColumn(),
+                    mb_strwidth($this->stream->current()->getLexeme(), 'UTF-8')
                 );
             }
         }
@@ -336,7 +424,8 @@ class Parser implements ParserInterface
     private function parseTableDefinition(array $leadingComments): void
     {
         // 1. 判断是标准表 [ 还是表数组 [[
-        $firstBracket = $this->stream->expect("Expected '[' for table definition", TokenType::LEFT_BRACKET);
+        $firstBracket = $this->expectToken("Expected '[' for table definition", TokenType::LEFT_BRACKET);
+
         $isTableArray = false;
 
         if ($this->stream->current()->getType() === TokenType::LEFT_BRACKET) {
@@ -344,11 +433,12 @@ class Parser implements ParserInterface
 
             // 下一个[的列号 必须比前一个 [ 的列号大 1，否则表示有空格
             if ($secondBracket->getColumn() !== $firstBracket->getColumn() + 1) {
-                throw new ParseException(
+                $this->throwError(
                     "Whitespace is not allowed between '[' and '['",
                     ParseErrorType::INVALID_CHAR,
                     $secondBracket->getLine(),
-                    $secondBracket->getColumn()
+                    $secondBracket->getColumn(),
+                    mb_strwidth($secondBracket->getLexeme(), 'UTF-8')
                 );
             }
 
@@ -356,22 +446,25 @@ class Parser implements ParserInterface
             $this->stream->next(); // 消耗第二个 [
         }
 
+
+
         // 2. 解析键路径 (KeyPath)
-        $keyPath = $this->parseKeyPath();
+        list($keyPath, $metas) = $this->parseKeyPath();
 
         // 3. 匹配闭合括号 ] 或 ]]
-        $firstRightBracket = $this->stream->expect("Expected ']'", TokenType::RIGHT_BRACKET);
+        $firstRightBracket = $this->expectToken("Expected ']'", TokenType::RIGHT_BRACKET);
 
         if ($isTableArray) {
-            $secondRightBracket = $this->stream->expect("Expected second ']' for array of tables", TokenType::RIGHT_BRACKET);
+            $secondRightBracket = $this->expectToken("Expected second ']' for array of tables", TokenType::RIGHT_BRACKET);
 
             // 下一个]的列号 必须比第一个 ] 的列号大 1，否则表示有空格
             if ($secondRightBracket->getColumn() !== $firstRightBracket->getColumn() + 1) {
-                throw new ParseException(
+                $this->throwError(
                     "Whitespace is not allowed between ']' and ']'",
                     ParseErrorType::INVALID_CHAR,
                     $secondRightBracket->getLine(),
-                    $secondRightBracket->getColumn()
+                    $secondRightBracket->getColumn(),
+                    mb_strwidth($secondRightBracket->getLexeme(), 'UTF-8')
                 );
             }
         }
@@ -382,18 +475,18 @@ class Parser implements ParserInterface
         // 5. 确保表头定义后，该行没有其他垃圾字符 (必须是换行或 EOF)
         if (!$this->stream->isEOF() && $this->stream->current()->getType() !== TokenType::NEWLINE) {
             $invalid = $this->stream->current();
-            throw new ParseException(
+            $this->throwError(
                 sprintf('Unexpected token "%s" after table definition', $invalid->getLexeme()),
                 ParseErrorType::UNEXPECTED_TOKEN,
                 $invalid->getLine(),
-                $invalid->getColumn()
+                $invalid->getColumn(),
+                mb_strwidth($invalid->getLexeme(), 'UTF-8')
             );
         }
 
         // 6. 在 AST 树中寻址，并转移上下文指针！
-        $this->currentTable = $this->resolveTableContext($keyPath, $isTableArray, $leadingComments, $trailingComment);
+        $this->currentTable = $this->resolveTableContext($keyPath, $isTableArray, $leadingComments, $trailingComment, $metas);
     }
-
 
     /**
      * 解析键路径
@@ -401,15 +494,16 @@ class Parser implements ParserInterface
      * 解析由点号分隔的键名序列，支持裸键和字符串键两种形式
      * 例如：a.b.c 或 "key name".sub."another key"
      *
-     * @return KeyPath 返回包含所有路径段的键路径对象
+     * @return array{0: KeyPath, 1: array} 返回 KeyPath 对象和各段的元数据(快照)数组
      */
-    private function parseKeyPath(): KeyPath
+    private function parseKeyPath(): array
     {
         $segments = [];
+        $metas = [];
 
         while (true) {
             // 期待一个键名 (裸键 或 字符串)
-            $token = $this->stream->expect(
+            $token = $this->expectToken(
                 "Expected key name",
                 TokenType::IDENTIFIER,
                 TokenType::STRING_BASIC,
@@ -430,15 +524,29 @@ class Parser implements ParserInterface
                 $val = $token->getLexeme();
             }
 
+            $lexeme = $token->getLexeme();
+
             // 如果 Lexer 激进地把 1.23 组合成了一个 FLOAT Token。
             // 但在键路径中，裸键是不允许有点号的，TOML 视其为 1 和 23 两个键。
             if ($token->getType() === TokenType::FLOAT && str_contains($val, '.')) {
                 $parts = explode('.', $val);
+                $colOffset = 0;
                 foreach ($parts as $part) {
                     $segments[] = $part;
+                    $metas[] = [
+                        'lex' => $part,
+                        'line' => $token->getLine(),
+                        'col' => $token->getColumn() + $colOffset
+                    ];
+                    $colOffset += strlen($part) + 1;
                 }
             } else {
                 $segments[] = $val;
+                $metas[] = [
+                    'lex' => $lexeme,
+                    'line' => $token->getLine(),
+                    'col' => $token->getColumn()
+                ];
             }
 
             // 如果紧跟着一个点号 (.)，说明路径还没完，继续循环
@@ -448,11 +556,17 @@ class Parser implements ParserInterface
             break;
         }
 
-        return new KeyPath($segments);
+        return [new KeyPath($segments), $metas];
     }
 
     /**
      * 将字符串解析为 PHP 原生整型
+     *
+     * 解析 TOML 格式的整数字符串，支持十进制、十六进制(0x)、
+     * 八进制(0o)和二进制(0b)表示法。
+     *
+     * @param string $value 要解析的整数字符串
+     * @return int 解析后的整数值
      */
     private function parseInteger(string $value): int
     {
@@ -467,6 +581,12 @@ class Parser implements ParserInterface
 
     /**
      * 将字符串解析为 PHP 原生浮点型
+     *
+     * 解析 TOML 格式的浮点数字符串，支持普通小数和特殊值
+     * (inf, -inf, nan)。
+     *
+     * @param string $value 要解析的浮点数字符串
+     * @return float 解析后的浮点数值
      */
     private function parseFloat(string $value): float
     {
@@ -506,7 +626,7 @@ class Parser implements ParserInterface
             $d = (int)$matches[3];
             // 检查年月日
             if ($m < 1 || $m > 12 || $d < 1 || !checkdate($m, $d, $y)) {
-                throw new ParseException("Invalid date: day or month out of range", ParseErrorType::INVALID_CHAR, $token->getLine(), $token->getColumn());
+                $this->throwError("Invalid date: day or month out of range", ParseErrorType::INVALID_CHAR, $token->getLine(), $token->getColumn());
             }
         }
 
@@ -519,7 +639,7 @@ class Parser implements ParserInterface
             $ss = (int)$matches[3];
             // 24:00:00 是非法的，60 秒仅在闰秒合法（TOML 允许 60）
             if ($hh > 23 || $mm > 59 || $ss > 60) {
-                throw new ParseException("Invalid time: hour or minute out of range", ParseErrorType::INVALID_CHAR, $token->getLine(), $token->getColumn());
+                $this->throwError("Invalid time: hour or minute out of range", ParseErrorType::INVALID_CHAR, $token->getLine(), $token->getColumn());
             }
         }
 
@@ -529,17 +649,16 @@ class Parser implements ParserInterface
         try {
             // 3. 构造 Support 对象
             return match ($type) {
-                TomlType::LOCAL_DATE => new TomlDate(new DateTimeImmutable($normalized)),
-                TomlType::LOCAL_TIME => $this->createTomlTime($normalized),
-                TomlType::LOCAL_DATETIME => new TomlLocalDateTime(new DateTimeImmutable($normalized)),
-                TomlType::OFFSET_DATETIME => new TomlOffsetDateTime(new DateTimeImmutable($normalized)),
-                default => throw new \Exception("Unreachable")
+                TomlType::LOCAL_DATE => (new TomlDate(new DateTimeImmutable($normalized)))->formatToml(),
+                TomlType::LOCAL_TIME => ($this->createTomlTime($normalized))->formatToml(),
+                TomlType::LOCAL_DATETIME => (new TomlLocalDateTime(new DateTimeImmutable($normalized)))->formatToml(),
+                TomlType::OFFSET_DATETIME => (new TomlOffsetDateTime(new DateTimeImmutable($normalized)))->formatToml(),
+                default => throw new Exception("Unreachable")
             };
-        } catch (\Exception $e) {
-            throw new ParseException("Invalid datetime format", ParseErrorType::INVALID_CHAR, $token->getLine(), $token->getColumn());
+        } catch (Exception) {
+            $this->throwError("Invalid datetime format", ParseErrorType::INVALID_CHAR, $token->getLine(), $token->getColumn());
         }
     }
-
 
     // ==========================================
     // 辅助/分支方法 (待实现)
@@ -547,6 +666,12 @@ class Parser implements ParserInterface
 
     /**
      * 判断当前 Token 是否可以作为键名 (裸键或字符串)
+     *
+     * 检查给定的 token 是否可以作为键值对的键名使用。
+     * 支持裸键、字符串、布尔值、数字和日期等类型。
+     *
+     * @param TokenInterface $token 要检查的 token
+     * @return bool 如果可以作为键名返回 true，否则返回 false
      */
     private function isKeyToken(TokenInterface $token): bool
     {
@@ -565,7 +690,11 @@ class Parser implements ParserInterface
 
     /**
      * 收集前导注释并吃掉换行符
-     * * @return list<string>
+     *
+     * 在解析新语句之前，收集所有连续的注释和空行。
+     * 这些注释会被附加到下一个解析的节点上。
+     *
+     * @return list<string> 收集到的注释内容列表
      */
     private function collectLeadingComments(): array
     {
@@ -573,7 +702,7 @@ class Parser implements ParserInterface
         while (!$this->stream->isEOF()) {
             $token = $this->stream->current();
             if ($token->getType() === TokenType::COMMENT) {
-                $comments[] = $token->getValue(); // 拿到去除了 # 的纯净注释
+                $comments[] = $token->getValue(); // 拿到去了 # 的纯净注释
                 $this->stream->next();
             } elseif ($token->getType() === TokenType::NEWLINE) {
                 $this->stream->next(); // 直接吃掉换行符
@@ -583,7 +712,6 @@ class Parser implements ParserInterface
         }
         return $comments;
     }
-
 
     /**
      * 收集行尾注释
@@ -622,7 +750,8 @@ class Parser implements ParserInterface
         KeyPath $path,
         bool    $isTableArray,
         array   $leadingComments,
-        ?string $trailingComment
+        ?string $trailingComment,
+        array $metas
     ): TableNode
     {
         $current = $this->root;
@@ -645,7 +774,7 @@ class Parser implements ParserInterface
                     // 如果中间节点是一个表数组，我们需要进入它的最后一个元素！
                     $elements = $node->getElements();
                     if (empty($elements)) {
-                        throw new ParseException(
+                        $this->throwError(
                             "Internal Error: Table array '$segment' is empty",
                             ParseErrorType::INTERNAL_ERROR,
                             0,
@@ -656,21 +785,23 @@ class Parser implements ParserInterface
                 } elseif ($node instanceof TableNode) {
                     // 拦截试图穿透内联表的行为
                     if ($node->isInline()) {
-                        throw new ParseException(
+                        $this->throwError(
                             sprintf("Cannot add keys to inline table '%s'", $segment),
                             ParseErrorType::INVALID_TABLE_DEFINITION,
-                            $node->getPosition()->line,
-                            $node->getPosition()->column
+                            $metas[$i]['line'],
+                            $metas[$i]['col'],
+                            mb_strwidth($metas[$i]['lex'], 'UTF-8')
                         );
                     }
 
                     $current = $node;
                 } else {
-                    throw new ParseException(
+                    $this->throwError(
                         sprintf("Cannot redefine existing key '%s' as a table", $segment),
                         ParseErrorType::CONFLICTING_KEY,
-                        $node->getPosition()->line,
-                        $node->getPosition()->column
+                        $metas[$i]['line'],
+                        $metas[$i]['col'],
+                        mb_strwidth($metas[$i]['lex'], 'UTF-8')
                     );
                 }
             }
@@ -678,6 +809,7 @@ class Parser implements ParserInterface
 
         // 2. 处理最后一个节点 (真正的表或表数组定义)
         $finalSegment = $segments[$lastIndex];
+        $finalMeta = $metas[$lastIndex];
 
         if ($isTableArray) {
             // 处理 [[table_array]]
@@ -688,11 +820,12 @@ class Parser implements ParserInterface
 
             $arrayNode = $current->get($finalSegment);
             if (!$arrayNode instanceof ArrayNode || !$arrayNode->isTableArray()) {
-                throw new ParseException(
+                $this->throwError(
                     sprintf("Conflict: '%s' is already defined and is not an array of tables", $finalSegment),
                     ParseErrorType::CONFLICTING_KEY,
-                    $arrayNode->getPosition()->line,
-                    $arrayNode->getPosition()->column
+                    $finalMeta['line'],
+                    $finalMeta['col'],
+                    mb_strwidth($finalMeta['lex'], 'UTF-8')
                 );
             }
 
@@ -709,11 +842,12 @@ class Parser implements ParserInterface
                 if ($node instanceof TableNode) {
                     // 显式/隐式表逻辑
                     if (!$node->isImplicit()) {
-                        throw new ParseException(
-                            sprintf("Table '[%s]' is already explicitly defined", $path),
+                        $this->throwError(
+                            sprintf("Table '[%s]' is already defined (cannot redefine via table header)", $path),
                             ParseErrorType::CONFLICTING_KEY,
-                            $node->getPosition()->line,
-                            $node->getPosition()->column
+                            $finalMeta['line'],
+                            $finalMeta['col'],
+                            mb_strwidth($finalMeta['lex'], 'UTF-8') + 2
                         );
                     }
 
@@ -726,11 +860,12 @@ class Parser implements ParserInterface
                     return $node;
                 }
 
-                throw new ParseException(
+                $this->throwError(
                     sprintf("Conflict: Key '%s' is already defined as a different type", $finalSegment),
                     ParseErrorType::CONFLICTING_KEY,
-                    $node->getPosition()->line,
-                    $node->getPosition()->column
+                    $finalMeta['line'],
+                    $finalMeta['col'],
+                    mb_strwidth($finalMeta['lex'], 'UTF-8')
                 );
             }
 
@@ -756,7 +891,7 @@ class Parser implements ParserInterface
      * @return void
      * @throws ParseException 当尝试向内联表添加点号键、键名冲突或类型不匹配时抛出异常
      */
-    private function insertDottedKey(TableNode $context, KeyPath $path, NodeInterface $valueNode): void
+    private function insertDottedKey(TableNode $context, KeyPath $path, NodeInterface $valueNode, array $metas): void
     {
         // 创建一个 SplObjectStorage 对象，用于存储点号键的表节点
         if ($this->dottedKeyTables === null) $this->dottedKeyTables = new SplObjectStorage();
@@ -768,6 +903,7 @@ class Parser implements ParserInterface
         // 遍历前面的路径段，隐式创建表
         for ($i = 0; $i < $lastIndex; $i++) {
             $segment = $segments[$i];
+            $meta = $metas[$i];
 
             if (!$current->has($segment)) {
                 $newTable = new TableNode($valueNode->getPosition(), '');
@@ -780,11 +916,11 @@ class Parser implements ParserInterface
                 if ($node instanceof TableNode) {
                     // TOML 规范：不能向内联表中添加点号键！
                     if ($node->isInline()) {
-                        throw new ParseException(
+                        $this->throwError(
                             "Cannot add dotted keys to an inline table",
                             ParseErrorType::INVALID_TABLE_DEFINITION,
-                            $node->getPosition()->line,
-                            $node->getPosition()->column
+                            $meta['line'], $meta['col'],
+                            mb_strwidth($meta['lex'], 'UTF-8')
                         );
                     }
 
@@ -792,35 +928,33 @@ class Parser implements ParserInterface
                     // 如果这个表不是隐式的，并且也不在我们的 dottedKeyTables 集合里，
                     // 说明它一定是某个 [table] 表头显式创建的！绝对不允许使用点号键穿透！
                     if (!$node->isImplicit() && !$this->dottedKeyTables->contains($node)) {
-                        throw new ParseException(
+                        $this->throwError(
                             sprintf("Cannot use dotted keys to add to explicitly defined table '%s'", $segment),
                             ParseErrorType::INVALID_TABLE_DEFINITION,
-                            $node->getPosition()->line,
-                            $node->getPosition()->column
+                            $meta['line'], $meta['col'], mb_strwidth($meta['lex'], 'UTF-8')
                         );
                     }
 
                     $current = $node;
                 } else {
-                    throw new ParseException(
+                    $this->throwError(
                         sprintf("Cannot redefine existing key '%s' as a table", $segment),
                         ParseErrorType::INVALID_TABLE_DEFINITION,
-                        $node->getPosition()->line,
-                        $node->getPosition()->column
+                        $meta['line'], $meta['col'], mb_strwidth($meta['lex'], 'UTF-8')
                     );
                 }
             }
         }
 
         $finalSegment = $segments[$lastIndex];
+        $finalMeta = $metas[$lastIndex];
 
         // 冲突检测：如果最终的键已经存在，报错
         if ($current->has($finalSegment)) {
-            throw new ParseException(
+            $this->throwError(
                 sprintf("Key '%s' is already defined", $finalSegment),
                 ParseErrorType::INVALID_TABLE_DEFINITION,
-                $valueNode->getPosition()->line,
-                $valueNode->getPosition()->column
+                $finalMeta['line'], $finalMeta['col'], mb_strwidth($finalMeta['lex'], 'UTF-8')
             );
         }
 
@@ -847,7 +981,6 @@ class Parser implements ParserInterface
         }
     }
 
-
     /**
      * 创建 TomlTime 对象
      *
@@ -871,13 +1004,12 @@ class Parser implements ParserInterface
 
         if (isset($parts[1])) {
             // 补齐 6 位微秒
-            $microStr = str_pad($parts[1], 6, '0', STR_PAD_RIGHT);
+            $microStr = str_pad($parts[1], 6, '0');
             $micro = (int)substr($microStr, 0, 6);
         }
 
         return new TomlTime($hour, $minute, $second, $micro);
     }
-
 
     /**
      * 标准化日期时间字符串
@@ -911,5 +1043,35 @@ class Parser implements ParserInterface
             }
         }
         return $normalized;
+    }
+
+    // ==========================================
+    // 错误抛出
+    // ==========================================
+    /**
+     * 接管 TokenStream 的 expect 断言逻辑
+     * 确保所有的语法预期错误都能触发可视化报错
+     */
+    private function expectToken(string $message, TokenType ...$types): TokenInterface
+    {
+        $current = $this->stream->current();
+
+        if (!in_array($current->getType(), $types, true)) {
+            $lexeme = $current->getLexeme();
+            // 计算波浪线的宽度 (EOF 时 lexeme 为空，至少给 1 个宽度)
+            $len = max(1, mb_strwidth($lexeme, 'UTF-8'));
+
+            $this->throwError(
+                sprintf('%s (Unexpected token "%s")', $message, $current->getType()->name),
+                ParseErrorType::INVALID_TYPE, // 或者使用 UNEXPECTED_TOKEN
+                $current->getLine(),
+                $current->getColumn(),
+                $len
+            );
+        }
+
+        // 断言成功，游标前进，并返回当前 token
+        $this->stream->next();
+        return $current;
     }
 }

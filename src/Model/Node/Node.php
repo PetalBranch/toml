@@ -2,7 +2,7 @@
 
 declare(strict_types=1);
 
-namespace Petalbranch\Toml\Parser;
+namespace Petalbranch\Toml\Model\Node;
 
 use Petalbranch\Toml\Contract\Parser\NodeInterface;
 use Petalbranch\Toml\Support\Position;
@@ -17,16 +17,16 @@ abstract class Node implements NodeInterface
 {
 
     /**
-     * @param Position $position 节点在源码中的位置
+     * @param Position|null $position 节点在源码中的位置
      * @param string $raw 原始字符串
      * @param list<string>|null $leadingComments 前导注释
      * @param string|null $trailingComment 尾部注释
      */
     public function __construct(
-        protected Position $position,
-        protected string   $raw,
-        protected ?array   $leadingComments = null,
-        protected ?string  $trailingComment = null,
+        protected ?Position $position,
+        protected string    $raw = '',
+        protected ?array    $leadingComments = null,
+        protected ?string   $trailingComment = null,
     )
     {
     }
@@ -50,7 +50,7 @@ abstract class Node implements NodeInterface
      */
     public function getPosition(): Position
     {
-        return $this->position;
+        return $this->position ?? new Position(0, 0);
     }
 
 

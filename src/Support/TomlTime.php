@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Petalbranch\Toml\Support;
 
+use Petalbranch\Toml\Contract\Dumper\TomlSerializableInterface;
 use Petalbranch\Toml\Contract\Type\TomlTemporalInterface;
 use Stringable;
 
@@ -15,7 +16,7 @@ use Stringable;
  * 同时实现了 Stringable 接口以支持字符串转换。
  * 该类是只读的（readonly），一旦创建就不能修改其属性。
  */
-readonly final class TomlTime implements TomlTemporalInterface, Stringable
+readonly final class TomlTime implements TomlTemporalInterface, Stringable, TomlSerializableInterface
 {
 
     /**
@@ -67,6 +68,20 @@ readonly final class TomlTime implements TomlTemporalInterface, Stringable
      * @return string 对象的字符串表示
      */
     public function __toString(): string
+    {
+        return $this->formatToml();
+    }
+
+    /**
+     * 转换为 TOML 格式的字符串
+     *
+     * 将当前时间对象转换为符合 TOML 规范的字符串表示。
+     * 该方法实现了 TomlSerializableInterface 接口，允许对象
+     * 在序列化时被正确处理。
+     *
+     * @return string 格式化后的 TOML 时间字符串
+     */
+    public function toToml(): string
     {
         return $this->formatToml();
     }

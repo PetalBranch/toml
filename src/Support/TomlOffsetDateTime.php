@@ -6,6 +6,7 @@ namespace Petalbranch\Toml\Support;
 
 use DateTimeImmutable;
 use InvalidArgumentException;
+use Petalbranch\Toml\Contract\Dumper\TomlSerializableInterface;
 use Petalbranch\Toml\Contract\Type\TomlTemporalInterface;
 use Stringable;
 
@@ -18,7 +19,7 @@ use Stringable;
  * 该类是只读的（readonly），一旦创建就不能修改其属性。
  * 内部使用 DateTimeImmutable 对象存储完整的日期时间信息和时区偏移量。
  */
-readonly final class TomlOffsetDateTime implements TomlTemporalInterface, Stringable
+readonly final class TomlOffsetDateTime implements TomlTemporalInterface, TomlSerializableInterface, Stringable
 {
     /**
      * 年份值
@@ -146,6 +147,20 @@ readonly final class TomlOffsetDateTime implements TomlTemporalInterface, String
      * @return string 对象的字符串表示
      */
     public function __toString(): string
+    {
+        return $this->formatToml();
+    }
+
+    /**
+     * 转换为 TOML 格式的字符串
+     *
+     * 将当前日期对象转换为符合 TOML 规范的字符串表示。
+     * 该方法实现了 TomlSerializableInterface 接口，允许对象
+     * 在序列化时被正确处理。
+     *
+     * @return string 格式化后的 TOML 日期字符串
+     */
+    public function toToml(): string
     {
         return $this->formatToml();
     }

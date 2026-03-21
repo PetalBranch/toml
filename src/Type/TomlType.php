@@ -87,48 +87,4 @@ enum TomlType
      */
     case TABLE;
 
-    /**
-     * 表数组
-     *
-     * @deprecated 建议使用`ArrayNode&lt;TableNode&gt;` 后期发版时会删除此枚举
-     * @see https://toml.io/en/v1.1.0#array-of-tables Toml.ArrayOfTable
-     */
-    case ARRAY_OF_TABLE;
-
-
-    /**
-     * 判断是否为日期时间类型
-     *
-     * 检查当前类型是否属于日期时间相关类型（带偏移量的日期时间、本地日期时间、本地日期、本地时间）
-     *
-     * @return bool 如果是日期时间类型返回 true，否则返回 false
-     */
-    public function isDateTime(): bool
-    {
-        return in_array($this, [
-            self::OFFSET_DATETIME,
-            self::LOCAL_DATETIME,
-            self::LOCAL_DATE,
-            self::LOCAL_TIME,
-        ], true);
-    }
-
-
-    /**
-     * 判断是否为标量类型
-     *
-     * 检查当前类型是否属于标量类型（字符串、整数、浮点数、布尔值）或日期时间类型
-     *
-     * @return bool 如果是标量类型或日期时间类型返回 true，否则返回 false
-     */
-    public function isScalar(): bool
-    {
-        return in_array($this, [
-                self::STRING,
-                self::INTEGER,
-                self::FLOAT,
-                self::BOOLEAN,
-            ], true) || $this->isDateTime();
-    }
-
 }

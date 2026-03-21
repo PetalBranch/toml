@@ -5,15 +5,18 @@ declare(strict_types=1);
 
 // 引入自动加载
 use Petalbranch\Toml\Exception\ParseException;
-use Petalbranch\Toml\Parser\ArrayNode;
+use Petalbranch\Toml\Model\Node\ArrayNode;
 use Petalbranch\Toml\Parser\Lexer;
 use Petalbranch\Toml\Parser\Parser;
-use Petalbranch\Toml\Parser\TableNode;
-use Petalbranch\Toml\Parser\ValueNode;
+use Petalbranch\Toml\Model\Node\TableNode;
+use Petalbranch\Toml\Model\Node\ValueNode;
+use Petalbranch\Toml\Toml;
 use Petalbranch\Toml\Type\TomlType;
 
 require_once '../vendor/autoload.php';
 
+// 关闭详细报错
+Toml::enableDetailedErrors(false);
 
 // 1. 读取标准输入
 $input = file_get_contents('php://stdin');
@@ -42,7 +45,7 @@ try {
         exit(1);
     }
     // 遇到语法错误，打印错误信息到 STDERR 并返回状态码 1 (告知 toml-test 这是一个 invalid 解析)
-    fwrite(STDERR, $e->getMessage() . PHP_EOL);
+    fwrite(STDERR, $e->getMessage() . $e->getFile() . ':' . $e->getLine() . PHP_EOL);
     exit(1);
 }
 
@@ -67,7 +70,7 @@ function convertNodeToTomlTestFormat($node): mixed
         if (array_is_list($result)) {
             // 如果全是数字键 (如 "0", "1")，PHP 会把它当成普通数组。
             // 必须强转为 object，强制输出 {"0": ...}
-            return (object) $result;
+            return (object)$result;
         }
 
         // 如果包含非纯连续数字的键 (如 "\0" 或 "a")，
@@ -113,7 +116,7 @@ function convertNodeToTomlTestFormat($node): mixed
             } else {
 
                 // json_encode 底层使用 serialize_precision，能完美保留 16 位以上的精度！
-                $valStr = (string) json_encode($val);
+                $valStr = (string)json_encode($val);
 
                 // 如果是一个普通整数形式的浮点数 (如 1.0)，PHP 默认 (string) 会变成 "1"
                 // 但 toml-test 期望看到小数点，所以要兜底补上
