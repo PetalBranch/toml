@@ -56,4 +56,14 @@ final class DumperConfig
      * 默认值为 8 个项目。
      */
     public int $inlineTableMaxItems = 8;
+
+
+    /**
+     * 等号对齐
+     *
+     * 确定是否将等号对齐，即键和值之间的等号是否对齐。
+     * 默认值为 false，表示等号不进行对齐。
+     */
+    public bool $alignEquals = false;
+
 }

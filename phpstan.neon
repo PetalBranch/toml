@@ -1,0 +1,7 @@
+parameters:
+    level: 9
+    paths:
+        - src
+
+    # 忽略一些不可避免的动态特性警告
+    ignoreErrors:

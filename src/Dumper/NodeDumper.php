@@ -64,7 +64,7 @@ class NodeDumper implements NodeDumperInterface
      * 支持普通键值对、嵌套表和表数组的渲染。
      *
      * @param TableNode $node 要转储的表节点
-     * @param array $path 当前节点在文档中的路径（用于生成完整键名）
+     * @param list<string> $path 当前节点在文档中的路径（用于生成完整键名）
      * @param bool $emitHeader 是否输出表头（[section]）
      * @return string 生成的 TOML 格式字符串
      */
@@ -76,8 +76,45 @@ class NodeDumper implements NodeDumperInterface
 
         // --- 第一步：渲染表头 ---
         if ($emitHeader && !empty($path)) {
+            // 渲染表头前导注释
+            [$tableLeading, $tableTrailing] = $this->renderComments($node);
+            $output .= $tableLeading;
+
             $fullPath = implode('.', array_map([TomlKeyHelper::class, 'format'], $path));
             $output .= "[$fullPath]" . $nl;
+
+            // 渲染表头尾部注释
+            $output .= $tableTrailing . $nl;
+        }
+
+        $maxKeyWidth = 0;
+        if ($this->config->alignEquals) {
+            foreach ($entries as $entry) {
+                $child = $entry->value;
+                $isInline = false;
+                if ($child instanceof TableNode) {
+                    $depth = count($path) + 1;
+                    $itemCount = count($child->getEntries());
+                    if ($this->config->inlineTable && $depth <= $this->config->inlineTableMaxDepth && $itemCount <= $this->config->inlineTableMaxItems) {
+                        $isInline = true;
+                    }
+                } elseif ($child instanceof ArrayNode) {
+                    if (!($child->isAllTables() && count($child->getElements()) > 0)) {
+                        $isInline = true;
+                    }
+                } else {
+                    $isInline = true;
+                }
+
+                // 如果属于当前层级要输出的键值对，计算它的视觉宽度
+                if ($isInline) {
+                    $formattedKey = TomlKeyHelper::format($entry->key);
+                    $width = mb_strwidth($formattedKey, 'UTF-8');
+                    if ($width > $maxKeyWidth) {
+                        $maxKeyWidth = $width;
+                    }
+                }
+            }
         }
 
         // --- 第二步：渲染内联表、数组及普通键值对 ---
@@ -102,10 +139,23 @@ class NodeDumper implements NodeDumperInterface
             }
 
             if ($isInline) {
+                $formattedKey = TomlKeyHelper::format($entry->key);
+                // 当前键值对的注释
+                [$leadingComments, $trailingComment] = $this->renderComments($child);
+
+                $padding = '';
+                if ($this->config->alignEquals && $maxKeyWidth > 0) {
+                    $currentWidth = mb_strwidth($formattedKey, 'UTF-8');
+                    $padding = str_repeat(' ', $maxKeyWidth - $currentWidth);
+                }
+
                 $output .= sprintf(
-                    "%s = %s%s",
-                    TomlKeyHelper::format($entry->key),
+                    "%s%s%s = %s%s%s",
+                    $leadingComments,
+                    $formattedKey,
+                    $padding,
                     $this->dumpInlineNode($child), // 调用内置的 Inline 排版器
+                    $trailingComment,
                     $nl
                 );
             }
@@ -136,8 +186,15 @@ class NodeDumper implements NodeDumperInterface
                     /** @var TableNode $tableItem */
                     if ($output !== "" && !str_ends_with($output, $nl . $nl)) $output .= $nl;
 
+                    // 渲染表数组头部的前导注释
+                    [$arrTableLeading, $arrTableTrailing] = $this->renderComments($tableItem);
+                    $output .= $arrTableLeading;
+
                     $fullPath = implode('.', array_map([TomlKeyHelper::class, 'format'], array_merge($path, [$entry->key])));
-                    $output .= "[[$fullPath]]" . $nl;
+                    $output .= "[[$fullPath]]";
+                    // 渲染表数组头部的尾部注释
+                    $output .= $arrTableTrailing . $nl;
+
                     // 表数组内部的键值对，不需要再次打印自身的表头，所以 emitHeader=false
                     $output .= $this->dumpTable($tableItem, array_merge($path, [$entry->key]), false);
                 }
@@ -176,5 +233,40 @@ class NodeDumper implements NodeDumperInterface
 
         // 最终的叶子节点，交给 ValueDumper 处理
         return $this->valueDumper->dump($node->getValue());
+    }
+
+    /**
+     * 将节点上的注释渲染为 TOML 字符串
+     *
+     * @param NodeInterface $node 当前节点
+     * @param bool $isInline 是否处于内联环境中（内联环境中只允许尾部注释，不允许前导注释）
+     * @return array{0: string, 1: string} 返回 [前导注释字符串, 尾部注释字符串]
+     */
+    private function renderComments(NodeInterface $node, bool $isInline = false): array
+    {
+        $leadingStr = '';
+        $trailingStr = '';
+        $nl = $this->config->newline;
+
+        // 1. 渲染前导注释 (多行)
+        if (!$isInline) {
+            $leading = $node->getLeadingComments();
+            if (!empty($leading)) {
+                foreach ($leading as $comment) {
+                    // 如果原本就是空行(纯换行被收集)，就直接空行；否则加上 #
+                    $leadingStr .= ($comment === '' ? '' : '# ' . $comment) . $nl;
+                }
+            }
+        }
+
+        // 2. 渲染尾部注释 (单行)
+        $trailing = $node->getTrailingComment();
+        if ($trailing !== null && $trailing !== '') {
+            // 尾部注释前面加两个空格，视觉上更美观
+            $trailingStr = '  # ' . $trailing;
+        }
+
+
+        return [$leadingStr, $trailingStr];
     }
 }

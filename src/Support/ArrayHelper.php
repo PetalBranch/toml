@@ -19,7 +19,7 @@ class ArrayHelper
      * 检查给定的数组是否为关联数组（即键名不是连续的整数）。
      * 在 TOML 转换中，非关联数组映射为 Array [...]，关联数组映射为 Table 或 Inline Table。
      *
-     * @param array $array 要检查的数组
+     * @param array<array-key, mixed> $array
      * @return bool 如果是关联数组返回 true，否则返回 false
      */
     public static function isAssoc(array $array): bool

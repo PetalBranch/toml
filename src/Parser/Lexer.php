@@ -5,13 +5,13 @@ declare(strict_types=1);
 namespace Petalbranch\Toml\Parser;
 
 use Generator;
+use LogicException;
 use Petalbranch\Toml\Contract\Lexer\LexerInterface;
 use Petalbranch\Toml\Contract\Lexer\TokenStreamInterface;
 use Petalbranch\Toml\Exception\ParseException;
 use Petalbranch\Toml\Support\LazyTokenStream;
 use Petalbranch\Toml\Support\ThrowsErrorTrait;
 use Petalbranch\Toml\Support\Token;
-use Petalbranch\Toml\Support\ErrorContext;
 use Petalbranch\Toml\Type\ParseErrorType;
 use Petalbranch\Toml\Type\TokenType;
 
@@ -28,13 +28,39 @@ class Lexer implements LexerInterface
 {
     use ThrowsErrorTrait;
 
-    private array $chars = [];
-    private int $length = 0;
+    private string $source = '';
+    private int $byteLength = 0;
 
     // 游标状态
     private int $cursor = 0;
     private int $line = 1;
     private int $column = 1;
+
+    // 缓存当前字符，避免重复计算截取
+    private ?string $currentChar = null;
+    private int $currentCharLen = 0;
+
+    // UTF-8 字节码常量
+    private const int UTF8_BYTE_128 = 128; // 10000000
+    private const int UTF8_CONTINUATION_THRESHOLD = 192; // 11000000
+    private const int UTF8_2BYTE_THRESHOLD = 224; // 11100000
+    private const int UTF8_3BYTE_THRESHOLD = 240; // 11110000
+
+    // 正则模式数组，用于匹配不同类型的词法单元
+    private const array patterns = [
+        TokenType::BOOLEAN->name => '/^(true|false)(?![A-Za-z0-9_-])/',
+        TokenType::FLOAT->name . '_SPECIAL' => '/^[+-]?(inf|nan)(?![A-Za-z0-9_-])/',
+        TokenType::OFFSET_DATETIME->name => '/^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:[Zz]|[+-]\d{2}:\d{2})(?![A-Za-z0-9_-])/',
+        TokenType::LOCAL_DATETIME->name => '/^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?![A-Za-z0-9_-])/',
+        TokenType::LOCAL_TIME->name => '/^\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?![A-Za-z0-9_-])/',
+        TokenType::LOCAL_DATE->name => '/^\d{4}-\d{2}-\d{2}(?![A-Za-z0-9_-])/',
+        TokenType::FLOAT->name => '/^[+-]?(?:0|[1-9](?:_?\d)*)(?:\.\d(?:_?\d)*(?:[eE][+-]?\d(?:_?\d)*)?|[eE][+-]?\d(?:_?\d)*)(?![A-Za-z0-9_-])/',
+        TokenType::INTEGER->name . '_HEX' => '/^0x[0-9a-fA-F](?:_?[0-9a-fA-F])*(?![A-Za-z0-9_-])/',
+        TokenType::INTEGER->name . '_OCT' => '/^0o[0-7](?:_?[0-7])*(?![A-Za-z0-9_-])/',
+        TokenType::INTEGER->name . '_BIN' => '/^0b[01](?:_?[01])*(?![A-Za-z0-9_-])/',
+        TokenType::INTEGER->name => '/^[+-]?(?:0|[1-9](?:_?\d)*)(?![A-Za-z0-9_-])/',
+        TokenType::IDENTIFIER->name => '/^[A-Za-z0-9_-]+/',
+    ];
 
     /**
      * 将 TOML 源代码转换为词法单元流
@@ -47,20 +73,17 @@ class Lexer implements LexerInterface
     public function tokenize(string $source): TokenStreamInterface
     {
         $this->rawSource = $source;
+        $this->source = $source;
 
-        // 将原文本强行按 UTF-8 切成字符数组。哪怕是 多字节的 Emoji、语言字符，在这里也只是数组里的 1 个元素。
-        if ($source !== '') {
-            $this->chars = mb_str_split($source, 1, 'UTF-8');
-            $this->length = count($this->chars);
-        } else {
-            $this->chars = [];
-            $this->length = 0;
-        }
+        // 注意：这里取的是字节长度，不是字符长度，速度极快！
+        $this->byteLength = strlen($source);
 
-        // 重置状态
         $this->cursor = 0;
         $this->line = 1;
         $this->column = 1;
+
+        // 初始化第一个字符
+        $this->updateCurrentChar();
 
         return new LazyTokenStream($this->scan());
     }
@@ -126,54 +149,115 @@ class Lexer implements LexerInterface
 
 
     // ==========================================
-    // 状态机辅助方法：游标控制
+    // 动态 UTF-8 游标引擎
     // ==========================================
 
+    /**
+     * 更新当前字符信息
+     *
+     * 该方法根据当前游标位置从源字符串中读取下一个UTF-8字符，并更新当前字符及其长度属性。
+     * 通过检查UTF-8编码的首字节ASCII码值来确定字符的字节长度，支持1-4字节的UTF-8字符。
+     *
+     * @return void
+     */
+    private function updateCurrentChar(): void
+    {
+        if ($this->cursor >= $this->byteLength) {
+            $this->currentChar = null;
+            $this->currentCharLen = 0;
+            return;
+        }
+
+        // 通过读取首个字节的 ASCII 码，瞬间判断该 UTF-8 字符的长度！
+        $byte = ord($this->source[$this->cursor]);
+
+        if ($byte < self::UTF8_BYTE_128) { // 0xxxxxxx: 单字节 (ASCII 字符)
+            $this->currentCharLen = 1;
+        } elseif ($byte < self::UTF8_2BYTE_THRESHOLD) { // 110xxxxx: 双字节 (如部分拉丁文、希腊字母)
+            $this->currentCharLen = 2;
+        } elseif ($byte < self::UTF8_3BYTE_THRESHOLD) { // 1110xxxx: 三字节 (如大部分中文字符)
+            $this->currentCharLen = 3;
+        } else { // 11110xxx: 四字节 (如 Emoji 💩)
+            $this->currentCharLen = 4;
+        }
+
+        $this->currentChar = substr($this->source, $this->cursor, $this->currentCharLen);
+    }
 
     /**
-     * 检查是否已到达输入末尾
+     * 判断是否已到达源字符串末尾
      *
-     * @return bool 如果游标位置大于或等于输入长度则返回 true，否则返回 false
+     * 检查当前游标位置是否已经到达或超过源字符串的字节长度，
+     * 用于确定词法分析是否已完成。
+     *
+     * @return bool 如果游标已到达或超过源字符串末尾返回true，否则返回false
+     * @phpstan-impure
      */
     private function isAtEnd(): bool
     {
-        return $this->cursor >= $this->length;
+        return $this->cursor >= $this->byteLength;
     }
 
     /**
      * 获取当前字符
      *
-     * @return string 返回当前游标位置的字符
+     * 返回当前解析位置的字符。如果当前没有字符（如已到达源字符串末尾），
+     * 则返回空字符串。
+     *
+     * @return string 当前字符，若无则返回空字符串
      */
     private function currentChar(): string
     {
-        return $this->chars[$this->cursor];
+        return $this->currentChar ?? '';
     }
 
+
     /**
-     * 获取当前字符的指定偏移量后的字符
+     * 向前查看指定偏移量的字符
      *
-     * @param int $offset 偏移量，默认为 1
-     * @return string|null 返回指定偏移量后的字符，如果超出输入范围则返回 null
+     * 该方法模拟游标向前移动指定数量的字符，然后返回目标位置的UTF-8字符，
+     * 而不会实际改变当前游标位置。用于语法分析时的前瞻判断。
+     *
+     * @param int $charOffset 要向前查看的字符数量，默认为1
+     * @return string|null 返回目标位置的字符，如果超出源字符串长度则返回null
      */
-    private function peekChar(int $offset = 1): ?string
+    private function peekChar(int $charOffset = 1): ?string
     {
-        $target = $this->cursor + $offset;
-        if ($target >= $this->length) return null;
-        return $this->chars[$target];
+        $tempCursor = $this->cursor;
+
+        // 模拟游标往前跳指定的字符数
+        for ($i = 0; $i < $charOffset; $i++) {
+            if ($tempCursor >= $this->byteLength) return null;
+            $len = $this->getCharLength($tempCursor);
+            if ($len === 0) return null;
+            $tempCursor += $len;
+        }
+
+        // 提取最终到达位置的字符
+        if ($tempCursor >= $this->byteLength) return null;
+        $len = $this->getCharLength($tempCursor);
+
+        return substr($this->source, $tempCursor, $len);
     }
 
     /**
-     * 消耗当前字符，游标向前移动一步，并维护行列号
+     * 向前移动一个字符位置
+     *
+     * 将词法分析器的游标向前移动当前字符的字节长度，同时更新列号，
+     * 并预加载下一个字符的信息。此方法用于处理完当前字符后，
+     * 移动到下一个字符进行分析。
+     *
+     * @return string 返回移动前的当前字符
      */
     private function advance(): string
     {
-        $char = $this->chars[$this->cursor];
-        $this->cursor++;
-
-        // 注意：换行逻辑通常在具体的 scanNewline 中处理行号，
-        // 但如果有些地方无脑跳过，这里也可以做一层兜底保障。
+        $char = $this->currentChar();
+        // 游标直接加上该字符的【字节长度】
+        $this->cursor += $this->currentCharLen;
         $this->column++;
+
+        // 更新下一个字符的缓存
+        $this->updateCurrentChar();
 
         return $char;
     }
@@ -297,6 +381,7 @@ class Lexer implements LexerInterface
             ']' => TokenType::RIGHT_BRACKET,
             '{' => TokenType::LEFT_BRACE,
             '}' => TokenType::RIGHT_BRACE,
+            default => throw new LogicException("Unreachable")
         };
 
         return new Token($type, $char, $char, $this->line, $startCol, $this->line, $startCol);
@@ -474,9 +559,8 @@ class Lexer implements LexerInterface
         $lexeme = $char;
         if ($char === 'x' || $char === 'u' || $char === 'U') {
             $len = $char === 'x' ? 2 : ($char === 'u' ? 4 : 8);
-            for ($i = 1; $i <= $len; $i++) {
-                $lexeme .= $this->chars[$this->cursor - $len - 1 + $i];
-            }
+            // 因为十六进制字符全是 ASCII（单字节），所以直接截取光标之前的 $len 个字节
+            $lexeme .= substr($this->source, $this->cursor - $len, $len);
         }
 
         return ['lexeme' => $lexeme, 'value' => $value];
@@ -494,6 +578,7 @@ class Lexer implements LexerInterface
      */
     private function scanUnicodeEscape(int $length): string
     {
+        $startCol = $this->column;
         $hex = '';
         for ($i = 0; $i < $length; $i++) {
             if ($this->isAtEnd()) {
@@ -501,7 +586,7 @@ class Lexer implements LexerInterface
             }
             $char = $this->advance();
             if (preg_match('/^[0-9a-fA-F]$/', $char) !== 1) {
-                $this->throwError(sprintf('Invalid Unicode escape character: %s', $char), ParseErrorType::INVALID_CHAR, $this->line, $this->column - 1);
+                $this->throwError(sprintf('Invalid Unicode escape character: %s', $char), ParseErrorType::INVALID_CHAR, $this->line, $startCol + 1 + $i);
             }
             $hex .= $char;
         }
@@ -510,10 +595,10 @@ class Lexer implements LexerInterface
 
         // TOML 规范要求：Unicode 标量值必须在有效范围内
         if (($codePoint >= 0xD800 && $codePoint <= 0xDFFF) || $codePoint > 0x10FFFF) {
-            $this->throwError(sprintf('Invalid Unicode scalar value: %X', $codePoint), ParseErrorType::INVALID_CHAR, $this->line, $this->column - $length - 2);
+            $this->throwError(sprintf('Invalid Unicode scalar value: %X', $codePoint), ParseErrorType::INVALID_CHAR, $this->line, $startCol);
         }
 
-        return mb_chr($codePoint, 'UTF-8');
+        return mb_chr((int)$codePoint, 'UTF-8');
     }
 
     /**
@@ -531,9 +616,7 @@ class Lexer implements LexerInterface
         $startCol = $this->column;
 
         // 消耗开头的 '''
-        $this->advance();
-        $this->advance();
-        $this->advance();
+        $this->advanceN(3);
         $lexeme = "'''";
         $value = "";
 
@@ -590,9 +673,7 @@ class Lexer implements LexerInterface
         }
 
         // 消耗结尾的 '''
-        $this->advance();
-        $this->advance();
-        $this->advance();
+        $this->advanceN(3);
         $lexeme .= "'''";
 
         return new Token(TokenType::STRING_MULTILINE_LITERAL, $lexeme, $value, $startLine, $startCol, $this->line, $this->column - 1);
@@ -614,9 +695,7 @@ class Lexer implements LexerInterface
         $startLine = $this->line;
         $startCol = $this->column;
 
-        $this->advance();
-        $this->advance();
-        $this->advance();
+        $this->advanceN(3);
         $lexeme = '"""';
         $value = "";
 
@@ -624,17 +703,6 @@ class Lexer implements LexerInterface
         if ($char === "\n" || $char === "\r") {
             $lexeme .= $this->consumeStringNewline();
         }
-
-//        if ($this->currentChar() === "\n") {
-//            $lexeme .= $this->advance();
-//            $this->line++;
-//            $this->column = 1;
-//        } elseif ($this->currentChar() === "\r" && $this->peekChar() === "\n") {
-//            $lexeme .= $this->advance();
-//            $lexeme .= $this->advance();
-//            $this->line++;
-//            $this->column = 1;
-//        }
 
         while (!$this->isAtEnd()) {
             // 分离字符串尾部的双引号和结束符
@@ -728,26 +796,36 @@ class Lexer implements LexerInterface
             $this->throwError("Unterminated multiline basic string", ParseErrorType::UNEXPECTED_EOF, $startLine, $startCol);
         }
 
-        $this->advance();
-        $this->advance();
-        $this->advance();
+        $this->advanceN(3);
         $lexeme .= '"""';
 
         return new Token(TokenType::STRING_MULTILINE_BASIC, $lexeme, $value, $startLine, $startCol, $this->line, $this->column - 1);
     }
 
+
     /**
-     * 检查字符是否为控制字符
+     * 判断字符是否为控制字符
      *
-     * 检测字符是否属于 TOML 规范中定义的控制字符范围，
-     * 包括 U+0000 到 U+0008、U+000A 到 U+001F 以及 U+007F
+     * 检查给定的字符是否属于ASCII或Unicode控制字符范围。
+     * 控制字符包括：
+     * - ASCII NUL 到 BS (0x00-0x08)
+     * - ASCII HT 到 US (0x0A-0x1F)
+     * - ASCII DEL (0x7F)
      *
-     * @param string $char 要检查的 UTF-8 字符
-     * @return bool 如果字符是控制字符则返回 true，否则返回 false
+     * 该方法支持单字节字符和UTF-8多字节字符，根据输入字符的长度选择
+     * 使用ord()或mb_ord()函数来获取字符的码点值。
+     *
+     * @param string $char 要检查的字符
+     * @return bool 如果是控制字符返回true，否则返回false
      */
     private function isControlChar(string $char): bool
     {
-        $ord = mb_ord($char, 'UTF-8');
+        $len = strlen($char);
+        if ($len === 1) {
+            $ord = ord($char);
+        } else {
+            $ord = mb_ord($char, 'UTF-8');
+        }
         return ($ord >= 0x00 && $ord <= 0x08) ||
             ($ord >= 0x0A && $ord <= 0x1F) ||
             ($ord === 0x7F);
@@ -755,59 +833,55 @@ class Lexer implements LexerInterface
 
 
     /**
-     * 扫描标识符或数字
+     * 扫描并识别标识符或数值字面量
      *
-     * 处理 TOML 中的标识符（裸键）、布尔值、整数、浮点数、日期时间等类型。
-     * 通过前瞻性读取和正则匹配来准确识别不同的词法单元类型，并对数值进行规范化处理。
+     * 该方法从当前位置开始扫描源代码，识别出完整的标识符或数值（包括整数、浮点数、
+     * 布尔值、日期时间等）。使用预扫描机制来确定token边界，并通过正则表达式模式匹配
+     * 来确定具体的token类型。
      *
-     * @return Token 返回扫描后的词法单元对象，类型可能是标识符、布尔值、整数、浮点数或日期时间
-     * @throws ParseException 当遇到无法识别的语法时抛出异常
+     * 扫描过程分为两个阶段：
+     * 1. 预扫描：使用字节级探测快速收集可能的字符序列，直到遇到分隔符
+     * 2. 模式匹配：按优先级顺序应用正则表达式模式，确定最匹配的token类型
+     *
+     * 支持的token类型包括：
+     * - 布尔值 (true/false)
+     * - 浮点数 (包括inf/nan特殊值)
+     * - 各种格式的日期时间
+     * - 十进制/十六进制/八进制/二进制整数
+     * - 普通标识符
+     *
+     * @return Token 返回识别出的token对象，包含类型、原始值、归一化值和位置信息
      */
     private function scanIdentifierOrNumber(): Token
     {
         $startLine = $this->line;
         $startCol = $this->column;
 
-        // 1. 圈定候选区域：一直读取，直到遇到 TOML 的结构分隔符
         $subject = '';
-        $lookahead = $this->cursor;
-        $maxLength = 100; // 添加长度上限，防御正则性能陷阱
+        $lookaheadCursor = $this->cursor; // 字节游标
+        $charCount = 0;
+        $maxLength = 100;
 
-        while ($lookahead < $this->length && ($lookahead - $this->cursor) < $maxLength) {
-            $c = $this->chars[$lookahead];
-            // 注意：绝不能在这里把点号 (.) 加上，因为浮点数和日期都有点号！
-            if (in_array($c, ["\n", "\r", '=', ',', '[', ']', '{', '}', '#'], true)) {
+        // 使用底层字节探测，只要不碰到边界符号就一直收割
+        while ($lookaheadCursor < $this->byteLength && $charCount < $maxLength) {
+            $byteStr = $this->source[$lookaheadCursor];
+            // ASCII 分隔符都在单字节范围内，直接用底层字符串查，速度爆表！
+            if (in_array($byteStr, ["\n", "\r", '=', ',', '[', ']', '{', '}', '#'], true)) {
                 break;
             }
-            $subject .= $c;
-            $lookahead++;
+
+            $len = $this->getCharLength($lookaheadCursor);
+
+            $subject .= substr($this->source, $lookaheadCursor, $len);
+            $lookaheadCursor += $len;
+            $charCount++;
         }
-
-        // 2. 严格的正则制导测试 (注意断言 (?![A-Za-z0-9_-]) 防止提前截断裸键)
-        $patterns = [
-            TokenType::BOOLEAN->name => '/^(true|false)(?![A-Za-z0-9_-])/',
-            TokenType::FLOAT->name . '_SPECIAL' => '/^[+-]?(inf|nan)(?![A-Za-z0-9_-])/',
-
-            // Toml v1.1.0 支持时间秒数省略
-            TokenType::OFFSET_DATETIME->name => '/^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:[Zz]|[+-]\d{2}:\d{2})(?![A-Za-z0-9_-])/',
-            TokenType::LOCAL_DATETIME->name => '/^\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?![A-Za-z0-9_-])/',
-            TokenType::LOCAL_TIME->name => '/^\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?![A-Za-z0-9_-])/',
-            TokenType::LOCAL_DATE->name => '/^\d{4}-\d{2}-\d{2}(?![A-Za-z0-9_-])/',
-
-            // 浮点数：必须包含小数点或指数 e/E
-            TokenType::FLOAT->name => '/^[+-]?(?:0|[1-9](?:_?\d)*)(?:\.\d(?:_?\d)*(?:[eE][+-]?\d(?:_?\d)*)?|[eE][+-]?\d(?:_?\d)*)(?![A-Za-z0-9_-])/',
-            TokenType::INTEGER->name . '_HEX' => '/^0x[0-9a-fA-F](?:_?[0-9a-fA-F])*(?![A-Za-z0-9_-])/',
-            TokenType::INTEGER->name . '_OCT' => '/^0o[0-7](?:_?[0-7])*(?![A-Za-z0-9_-])/',
-            TokenType::INTEGER->name . '_BIN' => '/^0b[01](?:_?[01])*(?![A-Za-z0-9_-])/',
-            TokenType::INTEGER->name => '/^[+-]?(?:0|[1-9](?:_?\d)*)(?![A-Za-z0-9_-])/',
-            // 兜底：裸键 (Identifier)
-            TokenType::IDENTIFIER->name => '/^[A-Za-z0-9_-]+/',
-        ];
 
         $matchedText = null;
         $matchedType = null;
 
-        foreach ($patterns as $typeName => $regex) {
+        // 使用预编译的正则
+        foreach (self::patterns as $typeName => $regex) {
             if (preg_match($regex, $subject, $matches)) {
                 $matchedText = $matches[0];
                 $matchedType = $typeName;
@@ -819,47 +893,34 @@ class Lexer implements LexerInterface
             $this->throwError(sprintf('Unexpected syntax near "%s"', substr($subject, 0, 10)), ParseErrorType::INVALID_CHAR, $this->line, $this->column);
         }
 
-        // 将正则键名映射回真正的 TokenType 枚举
         $realType = match (true) {
             str_starts_with($matchedType, 'FLOAT') => TokenType::FLOAT,
             str_starts_with($matchedType, 'INTEGER') => TokenType::INTEGER,
             default => constant(TokenType::class . '::' . $matchedType),
         };
 
-        // 3. 将游标向前推进匹配到的字符数
-        $len = mb_strlen($matchedText, 'UTF-8');
-        for ($i = 0; $i < $len; $i++) {
-            $this->advance();
-        }
+        // 将主游标向前推进
+        $byteLen = strlen($matchedText); // 因为 matchedText 来自 ASCII 边界内的子串
+        $this->cursor += $byteLen;
+        $this->column += mb_strlen($matchedText, 'UTF-8');
+        $this->updateCurrentChar();
 
-        // 4. Normalization
         $normalizedValue = $matchedText;
-
         if (str_starts_with($matchedType, 'INTEGER') || str_starts_with($matchedType, 'FLOAT')) {
-            // 数值规范化：去除 TOML 允许的视觉分隔符下划线
             $normalizedValue = str_replace('_', '', $matchedText);
-            // 这里绝对不做 (int) 或 (float) 的转换，保持为 string
         }
 
-        return new Token(
-            $realType,
-            $matchedText,
-            $normalizedValue,
-            $startLine,
-            $startCol,
-            $this->line,
-            $this->column - 1
-        );
+        return new Token($realType, $matchedText, $normalizedValue, $startLine, $startCol, $this->line, $this->column - 1);
     }
 
     /**
-     * 扫描十六进制转义序列
+     * 扫描并处理十六进制转义序列
      *
-     * 读取两个十六进制数字并转换为对应的 Unicode 字符
-     * 根据 TOML 规范，码点范围必须在 U+0000 到 U+00FF 之间（小于 256）
+     * 该方法用于解析形如\xFF的十六进制转义序列，读取两个十六进制字符，
+     * 验证其有效性，并将其转换为对应的UTF-8字符。
+     * 如果遇到无效的十六进制字符或未终止的转义序列，将抛出相应的解析错误。
      *
-     * @return string 返回转义序列解码后的字符
-     * @throws ParseException 当遇到未终止的转义序列或无效的十六进制字符时抛出异常
+     * @return string 返回由十六进制值解码得到的UTF-8字符
      */
     private function scanHexEscape(): string
     {
@@ -875,9 +936,8 @@ class Lexer implements LexerInterface
             $hex .= $char;
         }
 
-        // 规范要求：码点必须 < 256 (U+0000 to U+00FF)
         $codePoint = hexdec($hex);
-        return mb_chr($codePoint, 'UTF-8');
+        return mb_chr((int)$codePoint, 'UTF-8');
     }
 
 
@@ -914,4 +974,48 @@ class Lexer implements LexerInterface
     }
 
 
+    /**
+     * 获取指定位置UTF-8字符的字节长度
+     *
+     * 根据UTF-8编码规则，通过检查首字节的ASCII码值来确定该字符占用的字节数。
+     * UTF-8编码规则：
+     * - 单字节：0xxxxxxx (ASCII字符)
+     * - 双字节：110xxxxx (如部分拉丁文、希腊字母)
+     * - 三字节：1110xxxx (如大部分中文字符)
+     * - 四字节：11110xxx (如Emoji表情)
+     *
+     * @param int $position 源字符串中的字节位置
+     * @return int 返回字符的字节长度(1-4)，对于ASCII字符返回1
+     */
+    private function getCharLength(int $position): int
+    {
+        // 边界检查，避免越界访问
+        if ($position < 0 || $position >= $this->byteLength) return 0;
+        $byte = ord($this->source[$position]);
+
+        if ($byte >= self::UTF8_CONTINUATION_THRESHOLD) {
+            if ($byte < self::UTF8_2BYTE_THRESHOLD) return 2;
+            elseif ($byte < self::UTF8_3BYTE_THRESHOLD) return 3;
+            else return 4;
+        }
+
+        return 1;
+    }
+
+
+    /**
+     * 向前移动指定数量的字符
+     *
+     * 将词法分析器的位置向前移动指定数量的字符，每次移动都会更新
+     * 当前字符缓存和位置信息。这是advance()方法的批量版本。
+     *
+     * @param int $count 要移动的字符数量，默认为1
+     * @return void
+     */
+    private function advanceN(int $count = 1): void
+    {
+        for ($i = 0; $i < $count; $i++) {
+            $this->advance();
+        }
+    }
 }

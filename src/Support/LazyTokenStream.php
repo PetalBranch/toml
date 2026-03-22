@@ -10,6 +10,7 @@ use Petalbranch\Toml\Contract\Lexer\TokenStreamInterface;
 use Petalbranch\Toml\Exception\ParseException;
 use Petalbranch\Toml\Type\ParseErrorType;
 use Petalbranch\Toml\Type\TokenType;
+use RuntimeException;
 
 /**
  * 惰性词法单元流实现类
@@ -89,11 +90,15 @@ final class LazyTokenStream implements TokenStreamInterface
     public function peek(int $offset = 1): TokenInterface
     {
         $targetIndex = $this->cursor + $offset;
-        // 按需拉取未来的 Token
         $this->ensureBufferHas($targetIndex);
 
-        // 如果 offset 超出了文件末尾，返回缓冲区最后一个 Token (必然是 EOF)
-        return $this->buffer[$targetIndex] ?? $this->buffer[array_key_last($this->buffer)];
+        $lastIndex = array_key_last($this->buffer);
+        if ($lastIndex === null) {
+            throw new RuntimeException("Token buffer is empty.");
+        }
+
+        return $this->buffer[$targetIndex] ?? $this->buffer[$lastIndex];
+
     }
 
 
@@ -146,6 +151,7 @@ final class LazyTokenStream implements TokenStreamInterface
      * 检查是否已到达词法单元流末尾
      *
      * @return bool 如果当前词法单元类型为 EOF 则返回 true，否则返回 false
+     * @phpstan-impure
      */
     public function isEOF(): bool
     {

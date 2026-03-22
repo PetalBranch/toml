@@ -47,17 +47,28 @@ interface NodeInterface
     public function getPosition(): Position;
 
     /**
-     * 获取节点的前导注释
-     *
-     * @return list<string>|null 返回位于节点之前的注释字符串数组
+     * 获取前导注释
+     * @return list<string>|null
      */
     public function getLeadingComments(): ?array;
 
     /**
-     * 获取节点的尾部注释
-     *
-     * @return string|null 返回位于节点同一行末尾的注释，如果没有则返回 null
+     * 设置前导注释
+     * @param list<string> $comments
+     */
+    public function setLeadingComments(array $comments): void;
+
+    /**
+     * 获取尾部注释
+     * @return string|null
      */
     public function getTrailingComment(): ?string;
+
+    /**
+     * 设置尾部注释
+     *
+     * @param string|null $comment
+     */
+    public function setTrailingComment(?string $comment): void;
 
 }

@@ -20,7 +20,7 @@ interface ParserInterface
      * 解析 TOML 字符串
      *
      * @param string $toml 要解析的 TOML 格式字符串
-     * @return array 返回解析后的关联数组
+     * @return array<string, mixed> 返回解析后的关联数组
      * @throws ParseExceptionInterface 当 TOML 格式错误时抛出解析异常
      */
     public function parse(string $toml): array;
@@ -29,7 +29,7 @@ interface ParserInterface
      * 解析 TOML 文件
      *
      * @param string $filename 要解析的 TOML 文件路径
-     * @return array 返回解析后的关联数组
+     * @return array<string, mixed> 返回解析后的关联数组
      * @throws ParseExceptionInterface 当文件不存在或格式错误时抛出解析异常
      */
     public function parseFile(string $filename): array;

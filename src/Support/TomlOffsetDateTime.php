@@ -95,11 +95,22 @@ readonly final class TomlOffsetDateTime implements TomlTemporalInterface, TomlSe
      */
     public function __construct(DateTimeImmutable $dateTime)
     {
-        if ($dateTime->getTimezone() === false) {
-            throw new InvalidArgumentException('OffsetDateTime must have timezone');
-        }
-
         $this->dateTime = $dateTime;
+
+        // 初始化公共属性
+        $this->year = (int)$this->dateTime->format('Y');
+        $this->month = (int)$this->dateTime->format('m');
+        $this->day = (int)$this->dateTime->format('d');
+        $this->hour = (int)$this->dateTime->format('H');
+        $this->minute = (int)$this->dateTime->format('i');
+        $this->second = (int)$this->dateTime->format('s');
+
+        // 从微秒计算纳秒（DateTimeImmutable 只提供到微秒）
+        $microsecond = (int)$this->dateTime->format('u');
+        $this->nanosecond = $microsecond * 1000;
+
+        // 获取时区偏移
+        $this->offset = $dateTime->getOffset();
     }
 
     /**

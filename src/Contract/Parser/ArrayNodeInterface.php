@@ -15,6 +15,7 @@ use Traversable;
  * 提供对数组元素的添加、访问和计数方法
  *
  * @package Petalbranch\Toml\Contract\Parser
+ * @extends IteratorAggregate<int, NodeInterface>
  */
 interface ArrayNodeInterface extends NodeInterface, IteratorAggregate, Countable
 {
@@ -54,7 +55,7 @@ interface ArrayNodeInterface extends NodeInterface, IteratorAggregate, Countable
     /**
      * 获取迭代器用于遍历数组节点
      *
-     * @return Traversable 返回可遍历对象，用于迭代访问所有子节点
+     * @return Traversable<int, NodeInterface> 返回可遍历对象，用于迭代访问所有子节点
      */
     public function getIterator(): Traversable;
 }

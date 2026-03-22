@@ -39,7 +39,7 @@ final class Toml
      * 将输入的 TOML 格式字符串解析为 PHP 关联数组。
      *
      * @param string $toml 要解析的 TOML 格式字符串
-     * @return array 解析后的 PHP 关联数组
+     * @return array<string, mixed> 解析后的 PHP 关联数组
      */
     public static function parse(string $toml): array
     {
@@ -54,7 +54,7 @@ final class Toml
      * 读取指定路径的文件内容并将其作为 TOML 文档进行解析。
      *
      * @param string $filename 要解析的文件路径
-     * @return array 解析后的 PHP 关联数组
+     * @return array<string, mixed> 解析后的 PHP 关联数组
      * @throws ParseException 当文件不存在、不可读或读取失败时抛出异常
      */
     public static function parseFile(string $filename): array
@@ -115,7 +115,6 @@ final class Toml
 
         return true;
     }
-
 
 
     /**

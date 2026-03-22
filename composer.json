@@ -1,39 +1,64 @@
 {
   "name": "petalbranch/toml",
-  "description": "A TOML parser and dumper for PHP.",
+  "description": "An industrial-grade, zero-copy TOML parser and dumper for PHP.",
   "type": "library",
-  "require-dev": {
-    "phpunit/phpunit": "^11.0 || ^12.0 || ^13.0"
-  },
   "keywords": [
     "toml",
     "parser",
     "dumper",
+    "decoder",
+    "encoder",
+    "configuration",
     "php"
   ],
+  "homepage": "https://github.com/petalbranch/toml",
   "license": "Apache-2.0",
+  "authors": [
+    {
+      "name": "Petalbranch",
+      "email": "branch@petalmail.com",
+      "role": "Developer"
+    }
+  ],
+  "support": {
+    "issues": "https://github.com/petalbranch/toml/issues",
+    "source": "https://github.com/petalbranch/toml"
+  },
+  "require": {
+    "php": "^8.3",
+    "ext-json": "*",
+    "ext-mbstring": "*"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^11.0 || ^12.0 || ^13.0",
+    "phpstan/phpstan": "^2.1"
+  },
   "autoload": {
     "psr-4": {
       "Petalbranch\\Toml\\": "src/"
     }
   },
-  "authors": [
-    {
-      "name": "Petalbranch",
-      "email": "branch@petalmail.com"
+  "autoload-dev": {
+    "psr-4": {
+      "Petalbranch\\Toml\\Tests\\": "tests/"
     }
-  ],
-  "require": {
-    "php": "^8.3",
-    "ext-mbstring": "*"
   },
   "archive": {
     "exclude": [
-      "/tests"
+      "/tests",
+      "/phpstan.neon",
+      "/.gitignore"
     ]
   },
+  "config": {
+    "sort-packages": true,
+    "allow-plugins": {
+      "pestphp/pest-plugin": true
+    }
+  },
   "scripts": {
-    "test-toml": "cd tests && .\\toml-test-v2.1.0-windows-amd64.exe test -toml \"1.1\" -decoder \"php toml-test-decoder.php\" -encoder \"php toml-test-encoder.php\"",
-    "test-toml-decoder": "cd tests && .\\toml-test-v2.1.0-windows-amd64.exe test -toml \"1.1\" -decoder \"php toml-test-decoder.php\""
+    "test": "vendor/bin/phpunit",
+    "test-toml-win": "cd tests && .\\toml-test-v2.1.0-windows-amd64.exe test -toml \"1.1\" -decoder \"php toml-test-decoder.php\" -encoder \"php toml-test-encoder.php\"",
+    "analyse": "vendor/bin/phpstan analyse --memory-limit 512M"
   }
 }

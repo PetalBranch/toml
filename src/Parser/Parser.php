@@ -30,6 +30,7 @@ use Petalbranch\Toml\Type\TokenType;
 use Petalbranch\Toml\Type\TomlType;
 use RuntimeException;
 use SplObjectStorage;
+use Stringable;
 
 /**
  * TOML 解析器
@@ -49,6 +50,7 @@ class Parser implements ParserInterface
 
     private TableNode $currentTable;
 
+    /** @var SplObjectStorage<TableNode,mixed>|null */
     private ?SplObjectStorage $dottedKeyTables = null;
 
     /**
@@ -75,11 +77,13 @@ class Parser implements ParserInterface
      * 这是最常用的入口方法。
      *
      * @param string $toml 要解析的 TOML 格式字符串
-     * @return array 解析后的 PHP 关联数组
+     * @return array<string, mixed>
      */
     public function parse(string $toml): array
     {
-        return $this->parseToNode($toml)->getValue();
+        /** @var array<string, mixed> $value */
+        $value = $this->parseToNode($toml)->getValue();
+        return $value;
     }
 
     /**
@@ -88,7 +92,7 @@ class Parser implements ParserInterface
      * 读取指定的文件内容并将其作为 TOML 文档进行解析。
      *
      * @param string $filename 要解析的文件路径
-     * @return array 解析后的 PHP 关联数组
+     * @return array<string, mixed> 解析后的 PHP 关联数组
      * @throws RuntimeException 当文件不存在或不可读时抛出异常
      */
     public function parseFile(string $filename): array
@@ -97,6 +101,9 @@ class Parser implements ParserInterface
             throw new RuntimeException(sprintf('File "%s" does not exist or is not readable.', $filename));
         }
         $content = file_get_contents($filename);
+        if ($content === false) {
+            throw new RuntimeException(sprintf('Failed to read file "%s".', $filename));
+        }
         return $this->parse($content);
     }
 
@@ -277,7 +284,10 @@ class Parser implements ParserInterface
         };
 
         // 类型转换
-        $rawValue = (string)$token->getValue();
+        $val = $token->getValue();
+        assert(is_scalar($val) || $val instanceof \Stringable);
+        $strVal = (string)$val;
+        $rawValue = $strVal;
         $actualValue = match ($tomlType) {
             TomlType::INTEGER => $this->parseInteger($rawValue),
             TomlType::FLOAT => $this->parseFloat($rawValue),
@@ -447,7 +457,6 @@ class Parser implements ParserInterface
         }
 
 
-
         // 2. 解析键路径 (KeyPath)
         list($keyPath, $metas) = $this->parseKeyPath();
 
@@ -494,7 +503,8 @@ class Parser implements ParserInterface
      * 解析由点号分隔的键名序列，支持裸键和字符串键两种形式
      * 例如：a.b.c 或 "key name".sub."another key"
      *
-     * @return array{0: KeyPath, 1: array} 返回 KeyPath 对象和各段的元数据(快照)数组
+     * 返回 KeyPath 对象和各段的元数据(快照)数组
+     * @return array{0: KeyPath, 1: list<array{lex: string, line: int, col: int}>}
      */
     private function parseKeyPath(): array
     {
@@ -518,7 +528,9 @@ class Parser implements ParserInterface
             $type = $token->getType();
             if ($type === TokenType::STRING_BASIC || $type === TokenType::STRING_LITERAL) {
                 // 字符串必须用 getValue()，因为要去掉引号和处理转义符
-                $val = (string)$token->getValue();
+                $rawVal = $token->getValue();
+                assert(is_scalar($rawVal) || $rawVal instanceof \Stringable);
+                $val = (string)$rawVal;
             } else {
                 // 裸键及其变体必须用 getLexeme()，保持源码中的原样（保留下划线！）
                 $val = $token->getLexeme();
@@ -571,9 +583,9 @@ class Parser implements ParserInterface
     private function parseInteger(string $value): int
     {
         // 处理十六进制、八进制、二进制
-        if (str_starts_with($value, '0x')) return hexdec($value);
-        if (str_starts_with($value, '0o')) return octdec(str_replace('0o', '0', $value));
-        if (str_starts_with($value, '0b')) return bindec($value);
+        if (str_starts_with($value, '0x')) return (int)hexdec($value);
+        if (str_starts_with($value, '0o')) return (int)octdec(str_replace('0o', '0', $value));
+        if (str_starts_with($value, '0b')) return (int)bindec($value);
 
         // 普通十进制 (Lexer 已经去掉了下划线，直接强转即可)
         return (int)$value;
@@ -702,7 +714,9 @@ class Parser implements ParserInterface
         while (!$this->stream->isEOF()) {
             $token = $this->stream->current();
             if ($token->getType() === TokenType::COMMENT) {
-                $comments[] = $token->getValue(); // 拿到去了 # 的纯净注释
+                $val = $token->getValue();
+                assert(is_scalar($val) || $val instanceof Stringable);
+                $comments[] = (string)$val; // 拿到去了 # 的纯净注释
                 $this->stream->next();
             } elseif ($token->getType() === TokenType::NEWLINE) {
                 $this->stream->next(); // 直接吃掉换行符
@@ -725,7 +739,9 @@ class Parser implements ParserInterface
         $current = $this->stream->current();
 
         if ($current->getType() === TokenType::COMMENT) {
-            $comment = $current->getValue();
+            $val = $current->getValue();
+            assert(is_scalar($val) || $val instanceof Stringable);
+            $comment = (string)$val;
             $this->stream->next(); // 消耗掉这个注释
             return $comment;
         }
@@ -743,6 +759,7 @@ class Parser implements ParserInterface
      * @param bool $isTableArray 是否为表数组（[[table]] 形式），true 表示表数组，false 表示普通表
      * @param list<string> $leadingComments 前导注释列表，将附加到新创建的表节点上
      * @param string|null $trailingComment 尾部注释字符串，将附加到新创建的表节点上
+     * @param list<array{lex: string, line: int, col: int}> $metas
      * @return TableNode 返回解析得到的表节点对象
      * @throws ParseException 当遇到键名冲突、类型不匹配或重复定义等错误时抛出异常
      */
@@ -751,7 +768,7 @@ class Parser implements ParserInterface
         bool    $isTableArray,
         array   $leadingComments,
         ?string $trailingComment,
-        array $metas
+        array   $metas
     ): TableNode
     {
         $current = $this->root;
@@ -760,6 +777,7 @@ class Parser implements ParserInterface
 
         // 1. 遍历除了最后一个节点之外的所有中间路径 (隐式建表)
         for ($i = 0; $i < $lastIndex; $i++) {
+            assert($current instanceof TableNode); // 确保当前节点是 TableNode
             $segment = $segments[$i];
 
             if (!$current->has($segment)) {
@@ -810,6 +828,8 @@ class Parser implements ParserInterface
         // 2. 处理最后一个节点 (真正的表或表数组定义)
         $finalSegment = $segments[$lastIndex];
         $finalMeta = $metas[$lastIndex];
+
+        assert($current instanceof TableNode);
 
         if ($isTableArray) {
             // 处理 [[table_array]]
@@ -888,13 +908,17 @@ class Parser implements ParserInterface
      * @param TableNode $context 当前所在的表上下文节点
      * @param KeyPath $path 键路径对象，包含由点号分隔的路径段数组
      * @param NodeInterface $valueNode 要插入的值节点对象
+     * @param list<array{lex: string, line: int, col: int}> $metas
      * @return void
-     * @throws ParseException 当尝试向内联表添加点号键、键名冲突或类型不匹配时抛出异常
      */
     private function insertDottedKey(TableNode $context, KeyPath $path, NodeInterface $valueNode, array $metas): void
     {
         // 创建一个 SplObjectStorage 对象，用于存储点号键的表节点
-        if ($this->dottedKeyTables === null) $this->dottedKeyTables = new SplObjectStorage();
+        if ($this->dottedKeyTables === null) {
+            /** @var SplObjectStorage<TableNode, mixed> $storage */
+            $storage = new SplObjectStorage();
+            $this->dottedKeyTables = $storage;
+        }
 
         $current = $context;
         $segments = $path->segments;
@@ -902,6 +926,8 @@ class Parser implements ParserInterface
 
         // 遍历前面的路径段，隐式创建表
         for ($i = 0; $i < $lastIndex; $i++) {
+            // assert($current instanceof TableNode); // 断言当前节点是表节点
+
             $segment = $segments[$i];
             $meta = $metas[$i];
 
@@ -948,6 +974,8 @@ class Parser implements ParserInterface
 
         $finalSegment = $segments[$lastIndex];
         $finalMeta = $metas[$lastIndex];
+
+        // assert($current instanceof TableNode);
 
         // 冲突检测：如果最终的键已经存在，报错
         if ($current->has($finalSegment)) {

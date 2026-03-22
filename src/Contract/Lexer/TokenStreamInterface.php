@@ -64,6 +64,7 @@ interface TokenStreamInterface
      * 检查是否已到达词法单元流末尾
      *
      * @return bool 如果已到达文件末尾（EOF）返回 true，否则返回 false
+     * @phpstan-impure
      */
     public function isEOF(): bool;
 

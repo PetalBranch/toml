@@ -37,6 +37,7 @@ final readonly class KeyPath
      */
     public static function fromString(string $path, string $separator = '.'): self
     {
+        assert($separator !== '');
         return new self(explode($separator, $path));
     }
 

@@ -73,6 +73,41 @@ class ValueNode extends Node
     }
 
     /**
+     * 设置节点的值 (用于 AST 树的动态修改与无损回写)
+     *
+     * 开发者在直接修改 AST 树时调用此方法。
+     * 为了确保 Dumper 在重新转储时能正确渲染（例如给字符串加引号），
+     * 该方法会自动尝试推断新值的 TOML 类型。
+     *
+     * @param mixed $value 新的 PHP 原生值
+     * @param TomlType|null $type 可选的强制类型，不传则自动推断基础类型
+     * @return self 返回当前实例以支持链式调用
+     */
+    public function setValue(mixed $value, ?TomlType $type = null): self
+    {
+        $this->value = $value;
+
+        if ($type !== null) {
+            $this->type = $type;
+            return $this;
+        }
+
+        // 类型推断，防止 Dumper 渲染时类型错乱
+        $this->type = match (true) {
+            is_int($value) => TomlType::INTEGER,
+            is_float($value) => TomlType::FLOAT,
+            is_bool($value) => TomlType::BOOLEAN,
+            is_string($value) => TomlType::STRING,
+            // 对于复杂的日期/时间类型，建议开发者显式传入 $type
+            // 否则保持原来的类型不变
+            default => $this->type,
+        };
+
+        return $this;
+    }
+
+
+    /**
      * 快速检查当前标量是否为指定的 TOML 类型
      *
      * 这是一个实用的语法糖，避免在业务层频繁调用 $node->getType() === TomlType::...

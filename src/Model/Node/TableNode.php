@@ -50,7 +50,7 @@ class TableNode extends Node implements TableNodeInterface
      *
      * 递归提取所有子节点的值并组成关联数组
      *
-     * @return array 返回包含所有子节点值的关联数组
+     * @return array<string, mixed> 返回包含所有子节点值的关联数组
      */
     public function getValue(): array
     {
@@ -67,7 +67,7 @@ class TableNode extends Node implements TableNodeInterface
      */
     public function get(string $key): ?NodeInterface
     {
-        return $this->entries[$key]?->value ?? null;
+        return $this->has($key) ? $this->entries[$key]->value : null;
     }
 
     /**

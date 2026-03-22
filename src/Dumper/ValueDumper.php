@@ -9,6 +9,7 @@ use Petalbranch\Toml\Contract\Dumper\TypeFormatterInterface;
 use Petalbranch\Toml\Contract\Dumper\ValueDumperInterface;
 use Petalbranch\Toml\Exception\DumpException;
 use Petalbranch\Toml\Support\TomlKeyHelper;
+use Stringable;
 
 /**
  * TOML 值转储器
@@ -71,10 +72,10 @@ class ValueDumper implements ValueDumperInterface
         return match (true) {
             is_string($value) => $this->dumpString($value),
             is_bool($value) => $value ? 'true' : 'false',
-            is_float($value) => $this->dumpFloat($value), // ✨ 新增浮点数专属处理
-            is_int($value) => (string)$value,             // ✨ 整数直接转字符串
+            is_float($value) => $this->dumpFloat($value),
+            is_int($value), $value instanceof Stringable => (string)$value,
             $value === null => throw DumpException::unsupportedType('null'),
-            default => (string)$value,
+            default => throw new DumpException('Unsupported type: ' . get_debug_type($value)),
         };
     }
 

@@ -4,9 +4,10 @@ declare(strict_types=1);
 
 namespace Petalbranch\Toml\Dumper;
 
+use InvalidArgumentException;
 use Petalbranch\Toml\Contract\Dumper\TomlSerializableInterface;
 use Petalbranch\Toml\Contract\Dumper\TypeFormatterInterface;
-use Petalbranch\Toml\Contract\Type\TomlTemporalInterface;
+use Stringable;
 
 /**
  * 值访问器
@@ -56,7 +57,7 @@ class TypeFormatter implements TypeFormatterInterface
             return str_contains((string)$value, '.') ? (string)$value : $value . '.0';
         }
 
-        if ($value instanceof TomlTemporalInterface || $value instanceof TomlSerializableInterface) {
+        if ($value instanceof TomlSerializableInterface) {
             return $value->toToml();
         }
 
@@ -64,7 +65,11 @@ class TypeFormatter implements TypeFormatterInterface
             return $this->escapeString($value);
         }
 
-        return (string)$value;
+        if ($value instanceof Stringable) {
+            return (string)$value;
+        }
+
+        throw new InvalidArgumentException("Cannot format value of type " . get_debug_type($value));
     }
 
     /**

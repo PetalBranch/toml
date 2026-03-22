@@ -20,7 +20,7 @@ use Traversable;
 class ArrayNode extends Node implements ArrayNodeInterface
 {
     /**
-     * @var list<NodeInterface> 严格的数字索引数组，保存所有子节点
+     * @var array<int, NodeInterface> 保存所有子节点的数组
      */
     protected array $elements = [];
 
@@ -116,7 +116,7 @@ class ArrayNode extends Node implements ArrayNodeInterface
      */
     public function getElements(): array
     {
-        return $this->elements;
+        return array_values($this->elements);
     }
 
 

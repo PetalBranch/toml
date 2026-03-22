@@ -6,6 +6,7 @@ namespace Petalbranch\Toml\Contract\Exception;
 
 use Petalbranch\Toml\Support\ErrorContext;
 use Petalbranch\Toml\Type\ParseErrorType;
+use Throwable;
 
 /**
  * 解析异常接口
@@ -14,7 +15,7 @@ use Petalbranch\Toml\Type\ParseErrorType;
  *
  * @package Petalbranch\Toml\Contract\Exception
  */
-interface ParseExceptionInterface extends TomlExceptionInterface
+interface ParseExceptionInterface extends TomlExceptionInterface, Throwable
 {
     /**
      * 获取错误发生的行号
