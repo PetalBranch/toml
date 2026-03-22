@@ -5,11 +5,11 @@
 [![PHPStan Level 9](https://img.shields.io/badge/PHPStan-Level%209-brightgreen.svg)](https://phpstan.org/)
 [![License](https://img.shields.io/badge/license-Apache--2.0-green.svg)](LICENSE.txt)
 
-An industrial-grade TOML Parser and Dumper implemented in pure PHP.
+An industrial-grade TOML parser and dumper implemented purely in PHP.
 
-Designed with a Lexer and Abstract Syntax Tree (AST) architecture, completely decoupling parsing from dumping. It not
-only provides highly reliable TOML reading and writing capabilities but also features advanced capabilities like *
-*lossless comment preservation (round-trip)**, **O(1) memory zero-copy parsing**, and **aligned equals formatting**.
+Based on a Lexer and Abstract Syntax Tree (AST) architecture, it completely decouples parsing and dumping. It not only
+provides high-reliability TOML read/write capabilities but also features **Lossless Comment Round-Trip**, **O(1) Memory
+Extremely Fast Parsing**, and **Equal Sign Alignment Formatting**.
 
 ---
 
@@ -22,32 +22,36 @@ only provides highly reliable TOML reading and writing capabilities but also fea
 
 ## ✨ Core Features
 
+* 🧲 **Zero Learning Curve (Native-like DX)**
+  Provides out-of-the-box global helper functions `toml_encode()` and `toml_decode()`, perfectly mirroring PHP's native
+  JSON functions for muscle memory, offering an extremely smooth experience.
 * 🛡️ **Industrial-Grade Type Safety (PHPStan Level 9)**
-  The entire codebase passes PHPStan Level 9 static analysis. Zero implicit conversions and zero type blind spots,
-  ensuring absolute code reliability.
-* 🚀 **O(1) Memory Zero-Copy Lexer**
-  Abandons the inefficient `mb_str_split` in favor of an underlying byte-cursor and dynamic UTF-8 probes. Whether
-  parsing a 1KB or 100MB config file, memory usage remains near O(1).
+  The entire codebase passes PHPStan (Level 9) static analysis at the highest level, eliminating all implicit
+  conversions and type blind spots, providing absolutely reliable code quality.
+* 🚀 **O(1) Memory Extremely Fast Parsing (Zero-Copy Lexer)**
+  Abandons inefficient `mb_str_split`, adopting low-level byte cursors and dynamic UTF-8 probing techniques. Whether
+  parsing a 1KB or 100MB configuration file, memory usage approaches O(1), fearless of super-large files.
 * 🔄 **True Lossless Round-Trip**
-  The AST completely retains developer-written leading and trailing comments. You can directly modify AST nodes and
-  re-dump them without losing comments or formatting—perfect as an engine for configuration dashboards.
-* 💅 **Alignment Formatting**
-  The Dumper supports smart equals sign (`=`) alignment. It automatically calculates the visual width of keys (perfectly
-  compatible with CJK characters and Emojis), outputting beautifully ordered TOML code.
-* 🎯 **Strict Spec-Compliance**
-  Fully passes the official `toml-test v2.1.0` test suite: 100% pass rate for Decoder, 99.5% for Encoder.
-* 🔍 **Rich Error Reporting**
-  Provides structured errors, source code snippets, and exact pointers (line/column/pixel-level alignment).
-* ⏱️ **Native Temporal Types**
-  Fully supports the TOML 1.1.0 time model (Offset / Local / Date / Time).
+  The AST tree fully preserves leading and trailing comments written by the developer. Supports directly modifying AST
+  nodes and re-dumping, with comments and formatting intact, perfectly suitable as the backing engine for "Configuration
+  Visualization Panels".
+* 💅 **Ultimate Aesthetics Dump (Alignment Formatting)**
+  The Dumper supports smart equal sign alignment, automatically calculating the visual width of key names (perfectly
+  compatible with Chinese characters and Emojis), dumping TOML code with extreme order and beauty.
+* 🎯 **Strict Specification Implementation (Spec-Compliant)**
+  Fully passes the `toml-test v2.1.0` test suite: Decoder 100% pass, Encoder 99.5% pass.
+* 🔍 **Precise Error Diagnostics (Rich Error Reporting)**
+  Provides structured errors, source code snippets, and precise location (line/column/pixel-level pointer).
+* ⏱️ **Native Time Type Support**
+  Fully covers the TOML 1.1.0 time model (Offset / Local / Date / Time).
 
 ---
 
-## ❌ Rich Error Reporting
+## ❌ Precise Error Diagnostics (Rich Error Reporting)
 
-When encountering invalid TOML formatting, the parser provides **structured error messages + precise locations + context
-snippets**. The cursor pointer (`^`) not only pinpoints the exact column but also calculates the visual width based on
-full-width/half-width characters (like Chinese or Emojis) for pixel-perfect alignment:
+When TOML format is illegal, the parser provides **structured error information + precise location + context snippets**.
+The cursor pointer (`^`) not only precisely locates the column but also automatically calculates visual width based on
+full-width/half-width characters (such as Chinese, Emoji), achieving pixel-level alignment:
 
 ```text
 [UNEXPECTED_TOKEN] Unexpected token "." after value.
@@ -62,29 +66,29 @@ Key-value pairs must be separated by newlines.
 [CONFLICTING_KEY] Conflict: 'fruit' is already defined and is not an array of tables (Line: 6, Column: 3)
 
      5 | 
->    6 | [[fruit]]  # The parser throws an error when it detects 'fruit' is an array instead of a table
+>    6 | [[fruit]]  # The parser must throw an error when it discovers "fruit" is an array and not a table
            ^^^^^
      7 | name = "apple"
 ```
 
-Supported error types include:
+Supported error types (partial):
 
-* `UNEXPECTED_TOKEN`: Invalid syntax structure
-* `INVALID_CHAR`: Invalid character
-* `INVALID_TYPE`: Type mismatch
+* `UNEXPECTED_TOKEN`: Illegal syntax structure
+* `INVALID_CHAR`: Illegal character
+* `INVALID_TYPE`: Type error
 * `CONFLICTING_KEY`: Key conflict
-* `INVALID_TABLE_DEFINITION`: Invalid table definition
+* `INVALID_TABLE_DEFINITION`: Illegal table definition
 
-Every error includes:
+Each error includes:
 
-* Line / Column numbers
-* Original source code snippet
+* Line number / Column number
+* Raw code snippet
 * Precise pointer (`^`)
-* Human-readable error description
+* Readable error description
 
-👉 Not just a parser, it can also be used as a **TOML Linter / Validator**.
+👉 Not just a parser, but can also be used as a **TOML Linter / Validation Tool**.
 
-Additionally, detailed error messages are **configurable** (enabled by default):
+Additionally, detailed error information is **configurable** (default: enabled):
 
 ```php
 use Petalbranch\Toml\Toml;
@@ -92,10 +96,10 @@ use Petalbranch\Toml\Toml;
 Toml::enableDetailedErrors(false); // Globally disable detailed error output
 ```
 
-## 🔄 Lossless Round-Trip & Dynamic Modification
+## 🔄 Lossless Round-Trip & Dynamic Modification (Lossless Round-Trip)
 
-Most parsers strip away comments during the dumping process. This library allows you to interact directly with the AST (
-Abstract Syntax Tree). Modify values and re-dump, and **all comments and formatting will be perfectly preserved**:
+Most parsers lose comments when dumping. This library allows you to directly manipulate the AST (Abstract Syntax Tree),
+modify values, and re-dump, with all comments and formatting perfectly preserved:
 
 ```php
 use Petalbranch\Toml\Parser\Lexer;
@@ -104,42 +108,42 @@ use Petalbranch\Toml\Dumper\NodeDumper;
 use Petalbranch\Toml\Model\DumperConfig;
 
 $originalToml = <<<TOML
-# Core Database Configuration
+# Database core configuration
 [database]
-server = "192.168.1.1"  # Master DB IP
-port = 3306             # Do not modify in production
+server = "192.168.1.1"  # Main database IP
+port = 3306             # Do not modify in production environment
 TOML;
 
-// 1. Parse into an AST containing full comments
+// 1. Parse into an AST tree containing full comments
 $parser = new Parser(new Lexer());
 $rootNode = $parser->parseToNode($originalToml); 
 
-// 2. Directly modify the AST node value (types are automatically inferred)
+// 2. Directly modify the value of the AST node (type inferred automatically)
 $rootNode->get('database')->get('port')->setValue(6379);
 
-// 3. Dump the AST directly back to a string
+// 3. Directly dump the tree
 $dumper = new NodeDumper(new DumperConfig());
 echo $dumper->dump($rootNode);
 
-/* Output: Comments are perfectly preserved!
-# Core Database Configuration
+/* Output Result: Comments are perfectly preserved!
+# Database core configuration
 [database]
-server = "192.168.1.1"  # Master DB IP
-port = 6379             # Do not modify in production
+server = "192.168.1.1"  # Main database IP
+port = 6379             # Do not modify in production environment
 */
 ```
 
-## 💅 Alignment Formatting
+## 💅 Ultimate Aesthetics Dump (Alignment Formatting)
 
-A blessing for developers with OCD! By enabling the `alignEquals` configuration, the Dumper automatically pre-scans key
-names at the same level and intelligently aligns all equals signs with spaces:
+A blessing for perfectionists! After enabling the `alignEquals` configuration, the Dumper will automatically pre-scan
+key names at the same level and use spaces to intelligently align all equal signs:
 
 ```php
 use Petalbranch\Toml\Toml;
 use Petalbranch\Toml\Model\DumperConfig;
 
 $config = new DumperConfig();
-$config->alignEquals = true; // Enable equals alignment
+$config->alignEquals = true; // Enable equal sign alignment
 
 $data = [
     'server' => [
@@ -152,7 +156,7 @@ $data = [
 
 echo Toml::dump($data, $config);
 
-/* Generates incredibly clean formatting:
+/* Outputs extremely clean formatting:
 [server]
 ip              = "127.0.0.1"
 max_connections = 1000
@@ -165,7 +169,7 @@ enable          = true
 
 ## 🧪 Test Coverage (toml-test)
 
-This project is rigorously verified against the official `toml-test v2.1.0` test suite:
+This project is verified based on the official `toml-test v2.1.0` test suite:
 
 ```text
 > cd tests && .\toml-test-v2.1.0-windows-amd64.exe test -toml "1.1" -decoder "php toml-test-decoder.php" -encoder "php toml-test-encoder.php"
@@ -176,34 +180,36 @@ toml-test v2.1.0
   invalid tests: 466 passed, 0 failed
 ```
 
-Breakdown:
+Explanation:
 
-* **Decoder**: 100% Passed
-* **Invalid (Rejection)**: 100% correctly rejected
-* **Encoder**: Only 1 edge-case difference (does not affect mainstream use cases)
+* **Parser (Decoder)**: 100% pass
+* **Invalid Cases (Invalid)**: 100% correctly rejected
+* **Generator (Encoder)**: Only 1 boundary difference (does not affect major use cases)
 
-👉 Extensive coverage of TOML specification edge cases ensures unparalleled reliability and consistency.
+👉 Covers a large number of TOML specification boundary cases, ensuring the reliability and consistency of the
+implementation.
 
-> ⚠️ Note on the single failed test (`encoder/key/quoted-unicode`):
+> ⚠️ Unique Failed Test Case Explanation (encoder/key/quoted-unicode):
 >
-> This test uses a null byte (`\u0000`) as a dictionary key, passed into the encoder via JSON. Due to underlying
-> limitations in PHP's array/string key handling of null bytes, and JSON extension constraints, the input is deemed
-> invalid (`Invalid JSON input`) before it even reaches the TOML encoder.
+> This test case contains `\u0000` (null byte) as a key name, and passes it to the encoder via JSON.
+> Due to PHP's underlying limitations on null bytes in string/array keys, and the inability of the JSON parsing pipeline
+> to reliably handle this key, the input is deemed illegal before entering the encoder (`Invalid JSON input`).
 >
-> 👉 This behavior aligns with this library's "Known Limitations" and has zero impact on regular TOML usage.
+> 👉 This behavior is consistent with the library's "Known Limitations" and does not affect regular TOML use cases.
 
 ---
 
-## 🤔 Why Petalbranch TOML?
+## 🤔 Why Choose Petalbranch TOML?
 
-| Feature             | This Library                      | Common PHP Implementations     |
-|---------------------|-----------------------------------|--------------------------------|
-| Static Analysis     | ✅ Level 9 (Max) Passed            | ❌ Widespread `mixed` warnings  |
-| Lexer Memory        | ✅ O(1) Fast Byte Cursor           | ❌ O(N) Full array splitting    |
-| Round-Trip Comments | ✅ Fully Supported (AST)           | ❌ Comments lost on dump        |
-| Error Diagnostics   | ✅ Source Snippet + Pixel Cursor   | ❌ Basic Exceptions only        |
-| Dumper Quality      | ✅ Smart Inline + Equals Alignment | ❌ Mechanical line-break output |
-| Spec Coverage       | ✅ Extremely High (`toml-test`)    | ⚠️ Partial / Outdated spec     |
+| Feature                     | This Library                                            | Common Implementations                  |
+|-----------------------------|---------------------------------------------------------|-----------------------------------------|
+| API Friendliness            | ✅ Provides `toml_encode`/`toml_decode` global functions | ❌ Only supports verbose class calls     |
+| Static Analysis (PHPStan)   | ✅ Level 9 full pass                                     | ❌ Generally has `mixed` warnings        |
+| Memory Usage (Lexer)        | ✅ O(1) extremely fast byte cursor                       | ❌ O(N) full array split                 |
+| Lossless Comment Round-Trip | ✅ Perfect support (AST level)                           | ❌ Comments lost during dumping          |
+| Error Diagnostics           | ✅ Source snippet + pixel-level cursor                   | ❌ Only throws simple Exception          |
+| Generation Quality (Dumper) | ✅ Smart inline + equal sign alignment                   | ❌ Mechanical line break output          |
+| Specification Coverage      | ✅ Very High (toml-test verified)                        | ⚠️ Partial implementation / Behind spec |
 
 ---
 
@@ -211,14 +217,14 @@ Breakdown:
 
 ```text
 TOML Text
-   ↓ (O(1) Byte-cursor scanning)
+   ↓ (O(1) byte cursor scan)
 Lexer (Lexical analysis, generates Token Stream)
    ↓ 
-Parser (Syntax analysis, collects comments & hierarchy)
+Parser (Syntax analysis, collects comments and hierarchy)
    ↓
-AST (Abstract Syntax Tree with all metadata) ——> [Can be directly mutated for Lossless Round-Trip]
+AST (Abstract Syntax Tree containing all metadata) ——> [Can directly modify nodes for lossless round-trip]
    ↓
-Hydration (Transforms into pure PHP arrays)
+Hydration (Converts to pure PHP array)
    ↓
 Dumper (Serializes back to TOML, supports alignment and smart formatting)
 ```
@@ -227,7 +233,7 @@ Dumper (Serializes back to TOML, supports alignment and smart formatting)
 
 ## 📦 Installation
 
-Install via Composer (Requires PHP 8.3+):
+Install via Composer (requires PHP 8.3+):
 
 ```bash
 composer require petalbranch/toml
@@ -237,22 +243,41 @@ composer require petalbranch/toml
 
 ## 🚀 Quick Start
 
-### 1. Parse TOML
+### 0. Smooth Global Helper Functions (Recommended)
+
+If you are familiar with PHP's JSON functions, then you have already mastered 90% of this library's usage:
+
+```php
+// 1. Parse TOML string to PHP array
+$tomlString = 'title = "Petalbranch"';
+$data = toml_decode($tomlString);
+
+// 2. Encode PHP array to TOML string
+$config = [
+    'server' => [
+        'ip' => '127.0.0.1',
+        'port' => 8080
+    ]
+];
+echo toml_encode($config);
+```
+
+### 1. Parse TOML (Parse)
 
 ```php
 use Petalbranch\Toml\Toml;
 
-// Parse a file into a PHP array
+// Parse file to PHP array
 $config = Toml::parseFile(__DIR__ . '/config.toml');
 
-// Parse a string directly
+// Directly parse string
 $tomlString = 'title = "Petalbranch"';
 $data = Toml::parse($tomlString);
 ```
 
 ---
 
-### 2. Dump TOML
+### 2. Generate TOML (Dump)
 
 ```php
 use Petalbranch\Toml\Toml;
@@ -263,12 +288,12 @@ $data = [
     'owner' => ['name' => 'Tom', 'dob' => new \DateTime('1979-05-27T07:32:00-08:00')]
 ];
 
-// Dump to string using default config
+// Generate string using default configuration
 $toml = Toml::dump($data);
 
-// Dump to file using custom config
+// Use custom configuration and write directly to file
 $config = new DumperConfig();
-$config->inlineTable = true; // Enable smart inline table compression
+$config->inlineTable = true; // Enable smart compression for inline tables
 Toml::dumpFile(__DIR__ . '/config.generated.toml', $data, $config);
 ```
 
@@ -276,18 +301,18 @@ Toml::dumpFile(__DIR__ . '/config.generated.toml', $data, $config);
 
 ## 🎯 Use Cases
 
-* Configuration file parsing (Alternative to JSON / YAML)
+* Configuration file parsing (replacement for JSON / YAML)
 * CLI tool configuration systems
 * Framework configuration layers (Webman / Laravel style)
-* TOML Validators (CI / Lints)
+* TOML validation tools (CI / Lint)
 * Build tools / Package managers
 
 ---
 
-## ⚙️ Performance & Production Recommendations
+## ⚙️ Performance & Production Environment Suggestions
 
-For maximum performance in production environments, it's highly recommended to cache the parsed PHP array (e.g.,
-utilizing OPcache):
+In production environments, it is recommended to cache the parsed PHP array to achieve extreme performance (e.g., using
+OPcache):
 
 ```php
 use Petalbranch\Toml\Toml;
@@ -306,11 +331,11 @@ if (is_file($cacheFile) && !constant('DEBUG_MODE')) {
 
 ## ⚠️ Known Limitations
 
-Due to the underlying constraints of PHP's hash table object model, this library does not support using null bytes (
-`\u0000`) as object/array keys. This scenario is practically non-existent in standard engineering practices.
+Due to limitations in PHP's underlying hash table object model, this library does not support using null bytes (
+`\u0000`) as object key names. This is extremely rare in normal engineering practice.
 
 ---
 
 ## 📄 License
 
-This project is open-sourced under the Apache License 2.0 - see the [LICENSE](LICENSE.txt) file for details.
+This project is open-sourced under the Apache License 2.0 - see the [LICENSE](LICENSE.txt) file for more details.
